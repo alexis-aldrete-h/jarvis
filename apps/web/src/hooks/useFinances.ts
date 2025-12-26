@@ -2,76 +2,380 @@
 
 import { useState, useEffect } from 'react'
 import { Transaction, TransactionType, ExpenseCategory, Budget } from '@jarvis/shared'
+import { supabase } from '@/lib/supabase'
 
 const TRANSACTIONS_KEY = 'jarvis_transactions'
 const BUDGETS_KEY = 'jarvis_budgets'
 
+// Check if Supabase is configured
+const isSupabaseConfigured = (): boolean => {
+  return supabase !== null
+}
+
+// Load transactions from Supabase
+const loadTransactionsFromSupabase = async (): Promise<Transaction[]> => {
+  if (!isSupabaseConfigured()) {
+    return []
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('finance_transactions')
+      .select('*')
+      .order('date', { ascending: false })
+
+    if (error) {
+      console.error('Error loading transactions from Supabase:', error)
+      return []
+    }
+
+    if (!data) {
+      return []
+    }
+
+    // Convert database format to Transaction format
+    return data.map((row: any) => ({
+      id: row.id,
+      type: row.type as TransactionType,
+      amount: parseFloat(row.amount),
+      description: row.description,
+      category: row.category as ExpenseCategory | undefined,
+      date: row.date,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      tags: row.tags || undefined,
+    }))
+  } catch (error) {
+    console.error('Exception loading transactions from Supabase:', error)
+    return []
+  }
+}
+
+// Load budgets from Supabase
+const loadBudgetsFromSupabase = async (): Promise<Budget[]> => {
+  if (!isSupabaseConfigured()) {
+    return []
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('finance_budgets')
+      .select('*')
+      .order('start_date', { ascending: false })
+
+    if (error) {
+      console.error('Error loading budgets from Supabase:', error)
+      return []
+    }
+
+    if (!data) {
+      return []
+    }
+
+    // Convert database format to Budget format
+    return data.map((row: any) => ({
+      id: row.id,
+      category: row.category as ExpenseCategory,
+      limit: parseFloat(row.limit_amount),
+      period: row.period as 'weekly' | 'monthly' | 'yearly',
+      startDate: row.start_date,
+      endDate: row.end_date || undefined,
+    }))
+  } catch (error) {
+    console.error('Exception loading budgets from Supabase:', error)
+    return []
+  }
+}
+
+// Save transactions to Supabase
+const saveTransactionsToSupabase = async (transactions: Transaction[]): Promise<boolean> => {
+  if (!isSupabaseConfigured()) {
+    return false
+  }
+
+  try {
+    // Convert Transaction format to database format
+    const transactionsToUpsert = transactions.map((t) => ({
+      id: t.id,
+      type: t.type,
+      amount: t.amount,
+      description: t.description,
+      category: t.category || null,
+      date: typeof t.date === 'string' ? t.date : t.date.toISOString().split('T')[0],
+      tags: t.tags || null,
+      created_at: typeof t.createdAt === 'string' ? t.createdAt : t.createdAt.toISOString(),
+      updated_at: typeof t.updatedAt === 'string' ? t.updatedAt : t.updatedAt.toISOString(),
+    }))
+
+    // Get all current IDs
+    const currentIds = new Set(transactions.map(t => t.id))
+
+    // Get all existing IDs from database
+    const { data: existingData } = await supabase
+      .from('finance_transactions')
+      .select('id')
+
+    // Delete orphaned records
+    if (existingData) {
+      const orphanedIds = existingData
+        .filter(row => !currentIds.has(row.id))
+        .map(row => row.id)
+
+      if (orphanedIds.length > 0) {
+        await supabase
+          .from('finance_transactions')
+          .delete()
+          .in('id', orphanedIds)
+      }
+    }
+
+    // Upsert all transactions
+    if (transactionsToUpsert.length > 0) {
+      const { error } = await supabase
+        .from('finance_transactions')
+        .upsert(transactionsToUpsert, { onConflict: 'id' })
+
+      if (error) {
+        console.error('Error saving transactions to Supabase:', error)
+        return false
+      }
+    } else {
+      // If no transactions, clear the table
+      await supabase.from('finance_transactions').delete().neq('id', '')
+    }
+
+    return true
+  } catch (error) {
+    console.error('Exception saving transactions to Supabase:', error)
+    return false
+  }
+}
+
+// Save budgets to Supabase
+const saveBudgetsToSupabase = async (budgets: Budget[]): Promise<boolean> => {
+  if (!isSupabaseConfigured()) {
+    return false
+  }
+
+  try {
+    // Convert Budget format to database format
+    const budgetsToUpsert = budgets.map((b) => ({
+      id: b.id,
+      category: b.category,
+      limit_amount: b.limit,
+      period: b.period,
+      start_date: typeof b.startDate === 'string' ? b.startDate : b.startDate.toISOString().split('T')[0],
+      end_date: b.endDate ? (typeof b.endDate === 'string' ? b.endDate : b.endDate.toISOString().split('T')[0]) : null,
+    }))
+
+    // Get all current IDs
+    const currentIds = new Set(budgets.map(b => b.id))
+
+    // Get all existing IDs from database
+    const { data: existingData } = await supabase
+      .from('finance_budgets')
+      .select('id')
+
+    // Delete orphaned records
+    if (existingData) {
+      const orphanedIds = existingData
+        .filter(row => !currentIds.has(row.id))
+        .map(row => row.id)
+
+      if (orphanedIds.length > 0) {
+        await supabase
+          .from('finance_budgets')
+          .delete()
+          .in('id', orphanedIds)
+      }
+    }
+
+    // Upsert all budgets
+    if (budgetsToUpsert.length > 0) {
+      const { error } = await supabase
+        .from('finance_budgets')
+        .upsert(budgetsToUpsert, { onConflict: 'id' })
+
+      if (error) {
+        console.error('Error saving budgets to Supabase:', error)
+        return false
+      }
+    } else {
+      // If no budgets, clear the table
+      await supabase.from('finance_budgets').delete().neq('id', '')
+    }
+
+    return true
+  } catch (error) {
+    console.error('Exception saving budgets to Supabase:', error)
+    return false
+  }
+}
+
+// Migrate localStorage data to Supabase (one-time migration)
+const migrateLocalStorageToSupabase = async (): Promise<void> => {
+  if (!isSupabaseConfigured()) {
+    return
+  }
+
+  try {
+    // Check if migration has already been done
+    const migrationKey = 'jarvis_finances_migrated_to_supabase'
+    if (localStorage.getItem(migrationKey)) {
+      return
+    }
+
+    // Load from localStorage
+    const storedTransactions = localStorage.getItem(TRANSACTIONS_KEY)
+    const storedBudgets = localStorage.getItem(BUDGETS_KEY)
+
+    let transactionsToMigrate: Transaction[] = []
+    let budgetsToMigrate: Budget[] = []
+
+    if (storedTransactions) {
+      try {
+        transactionsToMigrate = JSON.parse(storedTransactions)
+      } catch (e) {
+        console.error('Failed to parse stored transactions:', e)
+      }
+    }
+
+    if (storedBudgets) {
+      try {
+        budgetsToMigrate = JSON.parse(storedBudgets)
+      } catch (e) {
+        console.error('Failed to parse stored budgets:', e)
+      }
+    }
+
+    // Only migrate if there's data and Supabase is empty
+    if (transactionsToMigrate.length > 0 || budgetsToMigrate.length > 0) {
+      const existingTransactions = await loadTransactionsFromSupabase()
+      const existingBudgets = await loadBudgetsFromSupabase()
+
+      // Only migrate if Supabase is empty
+      if (existingTransactions.length === 0 && existingBudgets.length === 0) {
+        if (transactionsToMigrate.length > 0) {
+          await saveTransactionsToSupabase(transactionsToMigrate)
+          console.log(`Migrated ${transactionsToMigrate.length} transactions to Supabase`)
+        }
+        if (budgetsToMigrate.length > 0) {
+          await saveBudgetsToSupabase(budgetsToMigrate)
+          console.log(`Migrated ${budgetsToMigrate.length} budgets to Supabase`)
+        }
+      }
+    }
+
+    // Mark migration as done
+    localStorage.setItem(migrationKey, 'true')
+  } catch (error) {
+    console.error('Error migrating localStorage to Supabase:', error)
+  }
+}
+
 export function useFinances() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [budgets, setBudgets] = useState<Budget[]>([])
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    const storedTransactions = localStorage.getItem(TRANSACTIONS_KEY)
-    const storedBudgets = localStorage.getItem(BUDGETS_KEY)
-    
-    if (storedTransactions) {
-      try {
-        setTransactions(JSON.parse(storedTransactions))
-      } catch (e) {
-        console.error('Failed to load transactions:', e)
+    const loadData = async () => {
+      setIsLoading(true)
+      
+      // Try to migrate localStorage data first
+      await migrateLocalStorageToSupabase()
+
+      // Load from Supabase if configured, otherwise fall back to localStorage
+      if (isSupabaseConfigured()) {
+        const loadedTransactions = await loadTransactionsFromSupabase()
+        const loadedBudgets = await loadBudgetsFromSupabase()
+        setTransactions(loadedTransactions)
+        setBudgets(loadedBudgets)
+      } else {
+        // Fallback to localStorage
+        const storedTransactions = localStorage.getItem(TRANSACTIONS_KEY)
+        const storedBudgets = localStorage.getItem(BUDGETS_KEY)
+        
+        if (storedTransactions) {
+          try {
+            setTransactions(JSON.parse(storedTransactions))
+          } catch (e) {
+            console.error('Failed to load transactions:', e)
+          }
+        }
+        
+        if (storedBudgets) {
+          try {
+            setBudgets(JSON.parse(storedBudgets))
+          } catch (e) {
+            console.error('Failed to load budgets:', e)
+          }
+        }
       }
+      
+      setIsLoading(false)
     }
-    
-    if (storedBudgets) {
-      try {
-        setBudgets(JSON.parse(storedBudgets))
-      } catch (e) {
-        console.error('Failed to load budgets:', e)
-      }
-    }
+
+    loadData()
   }, [])
 
-  const saveTransactions = (newTransactions: Transaction[]) => {
+  const saveTransactions = async (newTransactions: Transaction[]) => {
     setTransactions(newTransactions)
-    localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(newTransactions))
+    
+    if (isSupabaseConfigured()) {
+      await saveTransactionsToSupabase(newTransactions)
+    } else {
+      // Fallback to localStorage
+      localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(newTransactions))
+    }
   }
 
-  const saveBudgets = (newBudgets: Budget[]) => {
+  const saveBudgets = async (newBudgets: Budget[]) => {
     setBudgets(newBudgets)
-    localStorage.setItem(BUDGETS_KEY, JSON.stringify(newBudgets))
+    
+    if (isSupabaseConfigured()) {
+      await saveBudgetsToSupabase(newBudgets)
+    } else {
+      // Fallback to localStorage
+      localStorage.setItem(BUDGETS_KEY, JSON.stringify(newBudgets))
+    }
   }
 
-  const addTransaction = (transaction: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addTransaction = async (transaction: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newTransaction: Transaction = {
       ...transaction,
       id: Date.now().toString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    saveTransactions([...transactions, newTransaction])
+    await saveTransactions([...transactions, newTransaction])
     return newTransaction
   }
 
-  const deleteTransaction = (id: string) => {
-    saveTransactions(transactions.filter((t) => t.id !== id))
+  const deleteTransaction = async (id: string) => {
+    await saveTransactions(transactions.filter((t) => t.id !== id))
   }
 
-  const clearAllTransactions = () => {
+  const clearAllTransactions = async () => {
     setTransactions([])
-    localStorage.removeItem(TRANSACTIONS_KEY)
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_transactions').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(TRANSACTIONS_KEY)
+    }
   }
 
-  const addBudget = (budget: Omit<Budget, 'id'>) => {
+  const addBudget = async (budget: Omit<Budget, 'id'>) => {
     const newBudget: Budget = {
       ...budget,
       id: Date.now().toString(),
     }
-    saveBudgets([...budgets, newBudget])
+    await saveBudgets([...budgets, newBudget])
     return newBudget
   }
 
-  const deleteBudget = (id: string) => {
-    saveBudgets(budgets.filter((b) => b.id !== id))
+  const deleteBudget = async (id: string) => {
+    await saveBudgets(budgets.filter((b) => b.id !== id))
   }
 
   const getFinancialSummary = (startDate: Date, endDate: Date) => {
@@ -96,102 +400,25 @@ export function useFinances() {
     }
   }
 
-  const seedMockTransactions = () => {
-    const now = new Date()
-    const mockTransactions: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>[] = []
-
-    // Income transactions (salary, freelance, etc.)
-    const incomeCategories = [
-      { description: 'Salary', amount: 5500 },
-      { description: 'Freelance Project', amount: 1200 },
-      { description: 'Investment Dividends', amount: 350 },
-      { description: 'Side Business', amount: 800 },
-    ]
-
-    // Expense categories with realistic amounts
-    const expenseCategories: { description: string; amount: number; category: ExpenseCategory }[] = [
-      { description: 'Grocery Shopping', amount: 85, category: 'food' },
-      { description: 'Restaurant Dinner', amount: 45, category: 'food' },
-      { description: 'Coffee & Breakfast', amount: 12, category: 'food' },
-      { description: 'Uber Ride', amount: 25, category: 'transportation' },
-      { description: 'Gas Station', amount: 60, category: 'transportation' },
-      { description: 'Netflix Subscription', amount: 15, category: 'entertainment' },
-      { description: 'Concert Tickets', amount: 120, category: 'entertainment' },
-      { description: 'New Laptop', amount: 1299, category: 'shopping' },
-      { description: 'Clothing', amount: 180, category: 'shopping' },
-      { description: 'Electric Bill', amount: 95, category: 'bills' },
-      { description: 'Internet Bill', amount: 75, category: 'bills' },
-      { description: 'Rent', amount: 1800, category: 'bills' },
-      { description: 'Gym Membership', amount: 50, category: 'healthcare' },
-      { description: 'Doctor Visit', amount: 150, category: 'healthcare' },
-      { description: 'Online Course', amount: 299, category: 'education' },
-      { description: 'Flight Tickets', amount: 450, category: 'travel' },
-      { description: 'Hotel Booking', amount: 320, category: 'travel' },
-      { description: 'Miscellaneous', amount: 35, category: 'other' },
-    ]
-
-    // Generate transactions for the last 6 months
-    for (let monthOffset = 5; monthOffset >= 0; monthOffset--) {
-      const monthDate = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
-      
-      // Add 1-2 income transactions per month
-      const numIncomes = Math.floor(Math.random() * 2) + 1
-      for (let i = 0; i < numIncomes; i++) {
-        const income = incomeCategories[Math.floor(Math.random() * incomeCategories.length)]
-        const day = Math.floor(Math.random() * 28) + 1
-        mockTransactions.push({
-          type: 'income',
-          amount: income.amount + Math.random() * 200 - 100, // Add some variance
-          description: income.description,
-          date: new Date(monthDate.getFullYear(), monthDate.getMonth(), day).toISOString().split('T')[0],
-        })
-      }
-
-      // Add 8-15 expense transactions per month
-      const numExpenses = Math.floor(Math.random() * 8) + 8
-      for (let i = 0; i < numExpenses; i++) {
-        const expense = expenseCategories[Math.floor(Math.random() * expenseCategories.length)]
-        const day = Math.floor(Math.random() * 28) + 1
-        const variance = expense.amount * 0.2 // 20% variance
-        mockTransactions.push({
-          type: 'expense',
-          amount: Math.max(5, expense.amount + (Math.random() * variance * 2 - variance)), // Ensure positive
-          description: expense.description,
-          category: expense.category,
-          date: new Date(monthDate.getFullYear(), monthDate.getMonth(), day).toISOString().split('T')[0],
-        })
-      }
+  const clearAllFinanceData = async () => {
+    // Clear transactions
+    setTransactions([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_transactions').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(TRANSACTIONS_KEY)
     }
 
-    // Add some recent transactions (last 7 days)
-    for (let dayOffset = 6; dayOffset >= 0; dayOffset--) {
-      const date = new Date(now)
-      date.setDate(date.getDate() - dayOffset)
-      
-      if (Math.random() > 0.3) { // 70% chance of a transaction
-        const expense = expenseCategories[Math.floor(Math.random() * expenseCategories.length)]
-        mockTransactions.push({
-          type: 'expense',
-          amount: expense.amount + Math.random() * 50 - 25,
-          description: expense.description,
-          category: expense.category,
-          date: date.toISOString().split('T')[0],
-        })
-      }
+    // Clear budgets
+    setBudgets([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_budgets').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(BUDGETS_KEY)
     }
-
-    // Convert to full Transaction objects and save
-    const fullTransactions: Transaction[] = mockTransactions.map((t, idx) => ({
-      ...t,
-      id: `mock-${Date.now()}-${idx}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }))
-
-    saveTransactions([...transactions, ...fullTransactions])
   }
 
-  const importTransactionsFromCSV = (csvText: string): { success: number; errors: string[] } => {
+  const importTransactionsFromCSV = async (csvText: string): Promise<{ success: number; errors: string[] }> => {
     const lines = csvText.split('\n').filter(line => line.trim())
     if (lines.length < 2) {
       return { success: 0, errors: ['CSV file is empty or has no data rows'] }
@@ -365,7 +592,7 @@ export function useFinances() {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }))
-      saveTransactions([...transactions, ...fullTransactions])
+      await saveTransactions([...transactions, ...fullTransactions])
     }
 
     return {
@@ -377,13 +604,14 @@ export function useFinances() {
   return {
     transactions,
     budgets,
+    isLoading,
     addTransaction,
     deleteTransaction,
     clearAllTransactions,
     addBudget,
     deleteBudget,
     getFinancialSummary,
-    seedMockTransactions,
+    clearAllFinanceData,
     importTransactionsFromCSV,
   }
 }

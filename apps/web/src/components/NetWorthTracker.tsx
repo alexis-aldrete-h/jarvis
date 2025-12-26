@@ -61,7 +61,7 @@ export default function NetWorthTracker() {
     updateRetirementAccount,
     deleteRetirementAccount,
     getNetWorthSummary,
-    seedMockData,
+    clearAllNetWorthData,
   } = useNetWorth()
 
   const [activeSection, setActiveSection] = useState<'savings' | 'investments' | 'debt' | 'flight-training' | 'retirement' | 'summary'>('summary')
@@ -85,7 +85,7 @@ export default function NetWorthTracker() {
     planeRentalTransactions,
     extrasTransactions,
     incomeTransactions,
-    seedMockData: seedFlightTrainingMockData,
+    clearAllFlightTrainingData,
     deleteCFI,
     deletePlaneRental,
     deleteExtras,
@@ -182,23 +182,12 @@ export default function NetWorthTracker() {
 
   return (
     <div className="space-y-6 mb-0 pb-0">
-      {/* Header with Load Mock Data Button */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-text-primary">Net Worth Tracker</h2>
           <p className="text-sm text-text-secondary mt-1">Track your assets, investments, and debts to calculate your net worth.</p>
         </div>
-        {!hasData && (
-          <button
-            onClick={seedMockData}
-            className="px-4 py-2 text-sm font-medium rounded-lg bg-gradient-to-r from-gradient-orangeRed/70 to-gradient-bluePurple/70 text-white hover:from-gradient-orangeRed/80 hover:to-gradient-bluePurple/80 smooth-transition flex items-center gap-2 shadow-sm backdrop-blur-sm"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Load Mock Data
-          </button>
-        )}
       </div>
 
       {/* Section Tabs */}
@@ -1654,17 +1643,6 @@ export default function NetWorthTracker() {
                   {currencyFormatterMXN.format(flightTrainingMXN)} MXN
                 </p>
               </div>
-              {(cfiTransactions.length === 0 && planeRentalTransactions.length === 0 && extrasTransactions.length === 0 && incomeTransactions.length === 0) && (
-                <button
-                  onClick={seedFlightTrainingMockData}
-                  className="px-4 py-2 text-sm font-medium rounded-xl bg-gradient-to-r from-gradient-orangeRed/60 to-gradient-bluePurple/60 text-white hover:from-gradient-orangeRed/70 hover:to-gradient-bluePurple/70 smooth-transition flex items-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Load Mock Data
-                </button>
-              )}
             </div>
             {/* Breakdown */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-gradient-purple/20">
