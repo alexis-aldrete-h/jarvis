@@ -1122,6 +1122,20 @@ export default function TaskManager() {
   const [lastClickInfo, setLastClickInfo] = useState<{ id: string; time: number } | null>(null)
   // Force re-render after updates
   const [updateTrigger, setUpdateTrigger] = useState(0)
+  // State for delete confirmation modal for sprint/routine tasks
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
+    item: {
+      id: string
+      name: string
+      type: 'task' | 'subtask'
+      projectId: string
+      taskId?: string
+      subtaskId?: string
+      isRoutine: boolean
+      projectName: string
+      taskName?: string
+    }
+  } | null>(null)
   // Store routine task instances that have been scheduled (so they can be dragged multiple times)
   const ROUTINE_INSTANCES_KEY = 'jarvis_routine_instances'
   
@@ -1824,6 +1838,32 @@ export default function TaskManager() {
   const routineSubtasksForSchedule = useMemo(() => {
     return groupedGanttSubtasks.find(c => c.status === 'routine')?.ganttSubtasks || []
   }, [groupedGanttSubtasks, updateTrigger, projects])
+
+  // Handle deleting sprint/routine tasks from all places
+  const handleConfirmDelete = () => {
+    if (!deleteConfirmModal) return
+    
+    const { item } = deleteConfirmModal
+    
+    // For routine tasks, remove all routine instances from calendar first
+    if (item.isRoutine) {
+      if (item.type === 'task' && item.taskId) {
+        setRoutineInstances(prev => prev.filter(instance => !(instance.originalId === item.taskId && instance.type === 'task')))
+      } else if (item.type === 'subtask' && item.subtaskId) {
+        setRoutineInstances(prev => prev.filter(instance => !(instance.originalId === item.subtaskId && instance.type === 'subtask')))
+      }
+    }
+    
+    // Delete the task/subtask from all places (board, gantt, projects table, calendar)
+    // This will automatically remove it from calendar schedule, board section, gantt chart, and projects table
+    if (item.type === 'task' && item.taskId && item.projectId && deleteGanttTask) {
+      deleteGanttTask(item.projectId, item.taskId)
+    } else if (item.type === 'subtask' && item.taskId && item.subtaskId && item.projectId && deleteGanttSubtask) {
+      deleteGanttSubtask(item.projectId, item.taskId, item.subtaskId)
+    }
+    
+    setDeleteConfirmModal(null)
+  }
 
   // Handle creating a routine task
   const handleCreateRoutineTask = () => {
@@ -3157,8 +3197,39 @@ export default function TaskManager() {
                           key={`sprint-task-${ganttTask.id}`}
                           task={ganttTask}
                           parentProject={parentProject}
-                          onUpdate={(updates) => updateGanttTask?.(parentProject.id, ganttTask.id, updates)}
-                          onDelete={() => deleteGanttTask?.(parentProject.id, ganttTask.id)}
+                          onUpdate={(updates) => {
+                            // If hours (totalPoints) changed and task is scheduled, recalculate endDate
+                            const updatedTotalPoints = (updates as any).totalPoints
+                            if (updatedTotalPoints !== undefined && ganttTask.startDate && ganttTask.startDate.includes('T')) {
+                              const startDate = new Date(ganttTask.startDate)
+                              const newHours = storyPointsToHours(updatedTotalPoints)
+                              const newEndDate = new Date(startDate.getTime() + newHours * 60 * 60 * 1000)
+                              updateGanttTask?.(parentProject.id, ganttTask.id, {
+                                ...updates,
+                                endDate: newEndDate.toISOString(),
+                              } as any)
+                            } else {
+                              updateGanttTask?.(parentProject.id, ganttTask.id, updates)
+                            }
+                            
+                            // Force a re-render to ensure UI updates
+                            setTimeout(() => {
+                              setUpdateTrigger(prev => prev + 1)
+                            }, 100)
+                          }}
+                          onDelete={() => {
+                            setDeleteConfirmModal({
+                              item: {
+                                id: ganttTask.id,
+                                name: ganttTask.name,
+                                type: 'task',
+                                projectId: parentProject.id,
+                                taskId: ganttTask.id,
+                                isRoutine: false,
+                                projectName: parentProject.name,
+                              }
+                            })
+                          }}
                           columnStatus="sprint"
                           onDragStartCallback={(data) => {
                             setDraggedItemData(data)
@@ -3172,8 +3243,41 @@ export default function TaskManager() {
                           subtask={ganttSubtask}
                           parentTask={parentTask}
                           parentProject={parentProject}
-                          onUpdate={(updates) => updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, updates)}
-                          onDelete={() => deleteGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id)}
+                          onUpdate={(updates) => {
+                            // If hours (storyPoints) changed and subtask is scheduled, recalculate endDate
+                            const updatedStoryPoints = updates.storyPoints
+                            if (updatedStoryPoints !== undefined && ganttSubtask.startDate && ganttSubtask.startDate.includes('T')) {
+                              const startDate = new Date(ganttSubtask.startDate)
+                              const newHours = storyPointsToHours(updatedStoryPoints)
+                              const newEndDate = new Date(startDate.getTime() + newHours * 60 * 60 * 1000)
+                              updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, {
+                                ...updates,
+                                endDate: newEndDate.toISOString(),
+                              } as any)
+                            } else {
+                              updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, updates)
+                            }
+                            
+                            // Force a re-render to ensure UI updates
+                            setTimeout(() => {
+                              setUpdateTrigger(prev => prev + 1)
+                            }, 100)
+                          }}
+                          onDelete={() => {
+                            setDeleteConfirmModal({
+                              item: {
+                                id: ganttSubtask.id,
+                                name: ganttSubtask.name,
+                                type: 'subtask',
+                                projectId: parentProject.id,
+                                taskId: parentTask.id,
+                                subtaskId: ganttSubtask.id,
+                                isRoutine: false,
+                                projectName: parentProject.name,
+                                taskName: parentTask.name,
+                              }
+                            })
+                          }}
                           columnStatus="sprint"
                           onDragStartCallback={(data) => {
                             setDraggedItemData(data)
@@ -3314,8 +3418,52 @@ export default function TaskManager() {
                           key={`routine-task-${ganttTask.id}`}
                           task={ganttTask}
                           parentProject={parentProject}
-                          onUpdate={(updates) => updateGanttTask?.(parentProject.id, ganttTask.id, updates)}
-                          onDelete={() => deleteGanttTask?.(parentProject.id, ganttTask.id)}
+                          onUpdate={(updates) => {
+                            // Update the task itself
+                            updateGanttTask?.(parentProject.id, ganttTask.id, updates)
+                            
+                            // Also update all routine instances with the same originalId
+                            const updatedName = updates.name || ganttTask.name
+                            // totalPoints is already in hours (1:1 mapping), so use it directly
+                            const updatedHours = (updates as any).totalPoints !== undefined 
+                              ? storyPointsToHours((updates as any).totalPoints) 
+                              : undefined
+                            
+                            setRoutineInstances(prev => prev.map(inst => {
+                              // Match by originalId and type to find all instances of the same routine task
+                              if (inst.originalId === ganttTask.id && inst.type === 'task') {
+                                const finalHours = updatedHours !== undefined ? updatedHours : storyPointsToHours(inst.totalPoints)
+                                return {
+                                  ...inst,
+                                  name: updatedName,
+                                  totalPoints: updatedHours !== undefined ? updatedHours : inst.totalPoints,
+                                  // Recalculate dueDate if hours changed
+                                  dueDate: inst.startDate
+                                    ? new Date(new Date(inst.startDate).getTime() + finalHours * 60 * 60 * 1000).toISOString()
+                                    : inst.dueDate,
+                                }
+                              }
+                              return inst
+                            }))
+                            
+                            // Force a re-render to ensure UI updates
+                            setTimeout(() => {
+                              setUpdateTrigger(prev => prev + 1)
+                            }, 100)
+                          }}
+                          onDelete={() => {
+                            setDeleteConfirmModal({
+                              item: {
+                                id: ganttTask.id,
+                                name: ganttTask.name,
+                                type: 'task',
+                                projectId: parentProject.id,
+                                taskId: ganttTask.id,
+                                isRoutine: true,
+                                projectName: parentProject.name,
+                              }
+                            })
+                          }}
                           columnStatus="routine"
                           onDragStartCallback={(data) => {
                             setDraggedItemData(data)
@@ -3329,8 +3477,54 @@ export default function TaskManager() {
                           subtask={ganttSubtask}
                           parentTask={parentTask}
                           parentProject={parentProject}
-                          onUpdate={(updates) => updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, updates)}
-                          onDelete={() => deleteGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id)}
+                          onUpdate={(updates) => {
+                            // Update the subtask itself
+                            updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, updates)
+                            
+                            // Also update all routine instances with the same originalId
+                            const updatedName = updates.name || ganttSubtask.name
+                            // storyPoints is already in hours (1:1 mapping), so use it directly
+                            const updatedHours = updates.storyPoints !== undefined 
+                              ? storyPointsToHours(updates.storyPoints) 
+                              : undefined
+                            
+                            setRoutineInstances(prev => prev.map(inst => {
+                              // Match by originalId and type to find all instances of the same routine subtask
+                              if (inst.originalId === ganttSubtask.id && inst.type === 'subtask') {
+                                const finalHours = updatedHours !== undefined ? updatedHours : storyPointsToHours(inst.storyPoints)
+                                return {
+                                  ...inst,
+                                  name: updatedName,
+                                  storyPoints: updatedHours !== undefined ? updatedHours : inst.storyPoints,
+                                  // Recalculate dueDate if hours changed
+                                  dueDate: inst.startDate
+                                    ? new Date(new Date(inst.startDate).getTime() + finalHours * 60 * 60 * 1000).toISOString()
+                                    : inst.dueDate,
+                                }
+                              }
+                              return inst
+                            }))
+                            
+                            // Force a re-render to ensure UI updates
+                            setTimeout(() => {
+                              setUpdateTrigger(prev => prev + 1)
+                            }, 100)
+                          }}
+                          onDelete={() => {
+                            setDeleteConfirmModal({
+                              item: {
+                                id: ganttSubtask.id,
+                                name: ganttSubtask.name,
+                                type: 'subtask',
+                                projectId: parentProject.id,
+                                taskId: parentTask.id,
+                                subtaskId: ganttSubtask.id,
+                                isRoutine: true,
+                                projectName: parentProject.name,
+                                taskName: parentTask.name,
+                              }
+                            })
+                          }}
                           columnStatus="routine"
                           onDragStartCallback={(data) => {
                             setDraggedItemData(data)
@@ -4549,6 +4743,107 @@ export default function TaskManager() {
 
         </div>
       </main>
+
+      {/* Delete Confirmation Modal for Sprint/Routine Tasks */}
+      {deleteConfirmModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setDeleteConfirmModal(null)
+            }
+          }}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity" />
+          
+          {/* Modal Content */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative z-10 bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+          >
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-slate-200 bg-gradient-to-r from-red-50 to-orange-50">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Delete {deleteConfirmModal.item.type === 'task' ? 'Task' : 'Subtask'}
+                  </h3>
+                  <p className="text-sm text-slate-600 mt-0.5">
+                    This action cannot be undone
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            {/* Modal Body */}
+            <div className="px-6 py-5">
+              <p className="text-sm text-slate-700 mb-4">
+                Are you sure you want to permanently delete <span className="font-semibold text-slate-900">"{deleteConfirmModal.item.name}"</span>?
+              </p>
+              
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">This will remove the {deleteConfirmModal.item.type === 'task' ? 'task' : 'subtask'} from:</p>
+                <ul className="space-y-1.5 text-sm text-slate-700">
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    Calendar schedule
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    Board section
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    Gantt chart
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    Projects table
+                  </li>
+                  {deleteConfirmModal.item.isRoutine && (
+                    <li className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      All routine instances in calendar
+                    </li>
+                  )}
+                </ul>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setDeleteConfirmModal(null)}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hover:border-slate-400 smooth-transition shadow-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 smooth-transition shadow-sm"
+              >
+                Delete Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
