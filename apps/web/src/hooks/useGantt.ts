@@ -519,7 +519,8 @@ export function useGantt() {
     taskId: string,
     updates: Partial<GanttTask>
   ) => {
-    const updated = projects.map((project) => {
+    setProjects((currentProjects) => {
+      const updated = currentProjects.map((project) => {
       if (project.id === projectId) {
         // Create a copy of the project to modify
         let updatedProject = { ...project }
@@ -622,12 +623,13 @@ export function useGantt() {
         }
       }
       return project
-    })
+      })
 
-    const validatedProjects = validateAllProjects(updated)
-    setProjects(validatedProjects)
-    saveProjects(validatedProjects)
-  }, [projects, saveProjects, validateAllProjects])
+      const validatedProjects = validateAllProjects(updated)
+      saveProjects(validatedProjects)
+      return validatedProjects
+    })
+  }, [saveProjects, validateAllProjects])
 
   const deleteTask = useCallback((projectId: string, taskId: string) => {
     const updated = projects.map((project) => {

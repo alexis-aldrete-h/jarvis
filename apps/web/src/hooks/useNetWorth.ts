@@ -2,12 +2,438 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { BankAccount, Cash, Investment, Debt, RetirementAccount, NetWorthSummary } from '@jarvis/shared'
+import { supabase } from '@/lib/supabase'
 
 const BANK_ACCOUNTS_KEY = 'jarvis_bank_accounts'
 const CASH_KEY = 'jarvis_cash'
 const INVESTMENTS_KEY = 'jarvis_investments'
 const DEBTS_KEY = 'jarvis_debts'
 const RETIREMENT_KEY = 'jarvis_retirement'
+
+// Check if Supabase is configured
+const isSupabaseConfigured = (): boolean => {
+  return supabase !== null
+}
+
+// Load bank accounts from Supabase
+const loadBankAccountsFromSupabase = async (): Promise<BankAccount[]> => {
+  if (!isSupabaseConfigured()) return []
+  try {
+    const { data, error } = await supabase
+      .from('finance_bank_accounts')
+      .select('*')
+      .order('created_at', { ascending: false })
+    if (error) {
+      console.error('Error loading bank accounts from Supabase:', error)
+      return []
+    }
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      bankName: row.bank_name,
+      accountType: row.account_type as 'checking' | 'savings' | 'credit-card',
+      balanceMXN: parseFloat(row.balance_mxn),
+      balanceUSD: parseFloat(row.balance_usd),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }))
+  } catch (error) {
+    console.error('Exception loading bank accounts from Supabase:', error)
+    return []
+  }
+}
+
+// Load cash from Supabase
+const loadCashFromSupabase = async (): Promise<Cash[]> => {
+  if (!isSupabaseConfigured()) return []
+  try {
+    const { data, error } = await supabase
+      .from('finance_cash')
+      .select('*')
+      .order('created_at', { ascending: false })
+    if (error) {
+      console.error('Error loading cash from Supabase:', error)
+      return []
+    }
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type as 'pesos' | 'dollars',
+      amountMXN: parseFloat(row.amount_mxn),
+      amountUSD: parseFloat(row.amount_usd),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }))
+  } catch (error) {
+    console.error('Exception loading cash from Supabase:', error)
+    return []
+  }
+}
+
+// Load investments from Supabase
+const loadInvestmentsFromSupabase = async (): Promise<Investment[]> => {
+  if (!isSupabaseConfigured()) return []
+  try {
+    const { data, error } = await supabase
+      .from('finance_investments')
+      .select('*')
+      .order('created_at', { ascending: false })
+    if (error) {
+      console.error('Error loading investments from Supabase:', error)
+      return []
+    }
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type as Investment['type'],
+      quantity: row.quantity ? parseFloat(row.quantity) : undefined,
+      pricePerShare: row.price_per_share ? parseFloat(row.price_per_share) : undefined,
+      valueMXN: parseFloat(row.value_mxn),
+      valueUSD: parseFloat(row.value_usd),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }))
+  } catch (error) {
+    console.error('Exception loading investments from Supabase:', error)
+    return []
+  }
+}
+
+// Load debts from Supabase
+const loadDebtsFromSupabase = async (): Promise<Debt[]> => {
+  if (!isSupabaseConfigured()) return []
+  try {
+    const { data, error } = await supabase
+      .from('finance_debts')
+      .select('*')
+      .order('created_at', { ascending: false })
+    if (error) {
+      console.error('Error loading debts from Supabase:', error)
+      return []
+    }
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type as 'owed-to-me' | 'i-owe',
+      amountMXN: parseFloat(row.amount_mxn),
+      amountUSD: parseFloat(row.amount_usd),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }))
+  } catch (error) {
+    console.error('Exception loading debts from Supabase:', error)
+    return []
+  }
+}
+
+// Load retirement accounts from Supabase
+const loadRetirementAccountsFromSupabase = async (): Promise<RetirementAccount[]> => {
+  if (!isSupabaseConfigured()) return []
+  try {
+    const { data, error } = await supabase
+      .from('finance_retirement_accounts')
+      .select('*')
+      .order('created_at', { ascending: false })
+    if (error) {
+      console.error('Error loading retirement accounts from Supabase:', error)
+      return []
+    }
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type as RetirementAccount['type'],
+      valueMXN: parseFloat(row.value_mxn),
+      valueUSD: parseFloat(row.value_usd),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }))
+  } catch (error) {
+    console.error('Exception loading retirement accounts from Supabase:', error)
+    return []
+  }
+}
+
+// Save bank accounts to Supabase
+const saveBankAccountsToSupabase = async (bankAccounts: BankAccount[]): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    const accountsToUpsert = bankAccounts.map((b) => ({
+      id: b.id,
+      name: b.name,
+      bank_name: b.bankName,
+      account_type: b.accountType,
+      balance_mxn: b.balanceMXN,
+      balance_usd: b.balanceUSD,
+      created_at: typeof b.createdAt === 'string' ? b.createdAt : b.createdAt.toISOString(),
+      updated_at: typeof b.updatedAt === 'string' ? b.updatedAt : b.updatedAt.toISOString(),
+    }))
+    const currentIds = new Set(bankAccounts.map(b => b.id))
+    const { data: existingData } = await supabase.from('finance_bank_accounts').select('id')
+    if (existingData) {
+      const orphanedIds = existingData.filter(row => !currentIds.has(row.id)).map(row => row.id)
+      if (orphanedIds.length > 0) {
+        await supabase.from('finance_bank_accounts').delete().in('id', orphanedIds)
+      }
+    }
+    if (accountsToUpsert.length > 0) {
+      const { error } = await supabase.from('finance_bank_accounts').upsert(accountsToUpsert, { onConflict: 'id' })
+      if (error) {
+        console.error('Error saving bank accounts to Supabase:', error)
+        return false
+      }
+    } else {
+      await supabase.from('finance_bank_accounts').delete().neq('id', '')
+    }
+    return true
+  } catch (error) {
+    console.error('Exception saving bank accounts to Supabase:', error)
+    return false
+  }
+}
+
+// Save cash to Supabase
+const saveCashToSupabase = async (cash: Cash[]): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    const cashToUpsert = cash.map((c) => ({
+      id: c.id,
+      name: c.name,
+      type: c.type,
+      amount_mxn: c.amountMXN,
+      amount_usd: c.amountUSD,
+      created_at: typeof c.createdAt === 'string' ? c.createdAt : c.createdAt.toISOString(),
+      updated_at: typeof c.updatedAt === 'string' ? c.updatedAt : c.updatedAt.toISOString(),
+    }))
+    const currentIds = new Set(cash.map(c => c.id))
+    const { data: existingData } = await supabase.from('finance_cash').select('id')
+    if (existingData) {
+      const orphanedIds = existingData.filter(row => !currentIds.has(row.id)).map(row => row.id)
+      if (orphanedIds.length > 0) {
+        await supabase.from('finance_cash').delete().in('id', orphanedIds)
+      }
+    }
+    if (cashToUpsert.length > 0) {
+      const { error } = await supabase.from('finance_cash').upsert(cashToUpsert, { onConflict: 'id' })
+      if (error) {
+        console.error('Error saving cash to Supabase:', error)
+        return false
+      }
+    } else {
+      await supabase.from('finance_cash').delete().neq('id', '')
+    }
+    return true
+  } catch (error) {
+    console.error('Exception saving cash to Supabase:', error)
+    return false
+  }
+}
+
+// Save investments to Supabase
+const saveInvestmentsToSupabase = async (investments: Investment[]): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    const investmentsToUpsert = investments.map((i) => ({
+      id: i.id,
+      name: i.name,
+      type: i.type,
+      quantity: i.quantity || null,
+      price_per_share: i.pricePerShare || null,
+      value_mxn: i.valueMXN,
+      value_usd: i.valueUSD,
+      created_at: typeof i.createdAt === 'string' ? i.createdAt : i.createdAt.toISOString(),
+      updated_at: typeof i.updatedAt === 'string' ? i.updatedAt : i.updatedAt.toISOString(),
+    }))
+    const currentIds = new Set(investments.map(i => i.id))
+    const { data: existingData } = await supabase.from('finance_investments').select('id')
+    if (existingData) {
+      const orphanedIds = existingData.filter(row => !currentIds.has(row.id)).map(row => row.id)
+      if (orphanedIds.length > 0) {
+        await supabase.from('finance_investments').delete().in('id', orphanedIds)
+      }
+    }
+    if (investmentsToUpsert.length > 0) {
+      const { error } = await supabase.from('finance_investments').upsert(investmentsToUpsert, { onConflict: 'id' })
+      if (error) {
+        console.error('Error saving investments to Supabase:', error)
+        return false
+      }
+    } else {
+      await supabase.from('finance_investments').delete().neq('id', '')
+    }
+    return true
+  } catch (error) {
+    console.error('Exception saving investments to Supabase:', error)
+    return false
+  }
+}
+
+// Save debts to Supabase
+const saveDebtsToSupabase = async (debts: Debt[]): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    const debtsToUpsert = debts.map((d) => ({
+      id: d.id,
+      name: d.name,
+      type: d.type,
+      amount_mxn: d.amountMXN,
+      amount_usd: d.amountUSD,
+      created_at: typeof d.createdAt === 'string' ? d.createdAt : d.createdAt.toISOString(),
+      updated_at: typeof d.updatedAt === 'string' ? d.updatedAt : d.updatedAt.toISOString(),
+    }))
+    const currentIds = new Set(debts.map(d => d.id))
+    const { data: existingData } = await supabase.from('finance_debts').select('id')
+    if (existingData) {
+      const orphanedIds = existingData.filter(row => !currentIds.has(row.id)).map(row => row.id)
+      if (orphanedIds.length > 0) {
+        await supabase.from('finance_debts').delete().in('id', orphanedIds)
+      }
+    }
+    if (debtsToUpsert.length > 0) {
+      const { error } = await supabase.from('finance_debts').upsert(debtsToUpsert, { onConflict: 'id' })
+      if (error) {
+        console.error('Error saving debts to Supabase:', error)
+        return false
+      }
+    } else {
+      await supabase.from('finance_debts').delete().neq('id', '')
+    }
+    return true
+  } catch (error) {
+    console.error('Exception saving debts to Supabase:', error)
+    return false
+  }
+}
+
+// Save retirement accounts to Supabase
+const saveRetirementAccountsToSupabase = async (retirementAccounts: RetirementAccount[]): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    const accountsToUpsert = retirementAccounts.map((r) => ({
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      value_mxn: r.valueMXN,
+      value_usd: r.valueUSD,
+      created_at: typeof r.createdAt === 'string' ? r.createdAt : r.createdAt.toISOString(),
+      updated_at: typeof r.updatedAt === 'string' ? r.updatedAt : r.updatedAt.toISOString(),
+    }))
+    const currentIds = new Set(retirementAccounts.map(r => r.id))
+    const { data: existingData } = await supabase.from('finance_retirement_accounts').select('id')
+    if (existingData) {
+      const orphanedIds = existingData.filter(row => !currentIds.has(row.id)).map(row => row.id)
+      if (orphanedIds.length > 0) {
+        await supabase.from('finance_retirement_accounts').delete().in('id', orphanedIds)
+      }
+    }
+    if (accountsToUpsert.length > 0) {
+      const { error } = await supabase.from('finance_retirement_accounts').upsert(accountsToUpsert, { onConflict: 'id' })
+      if (error) {
+        console.error('Error saving retirement accounts to Supabase:', error)
+        return false
+      }
+    } else {
+      await supabase.from('finance_retirement_accounts').delete().neq('id', '')
+    }
+    return true
+  } catch (error) {
+    console.error('Exception saving retirement accounts to Supabase:', error)
+    return false
+  }
+}
+
+// Migrate localStorage data to Supabase (one-time migration)
+const migrateLocalStorageToSupabase = async (): Promise<void> => {
+  if (!isSupabaseConfigured()) return
+  try {
+    const migrationKey = 'jarvis_networth_migrated_to_supabase'
+    if (localStorage.getItem(migrationKey)) return
+
+    const storedBanks = localStorage.getItem(BANK_ACCOUNTS_KEY)
+    const storedCash = localStorage.getItem(CASH_KEY)
+    const storedInvestments = localStorage.getItem(INVESTMENTS_KEY)
+    const storedDebts = localStorage.getItem(DEBTS_KEY)
+    const storedRetirement = localStorage.getItem(RETIREMENT_KEY)
+
+    let banksToMigrate: BankAccount[] = []
+    let cashToMigrate: Cash[] = []
+    let investmentsToMigrate: Investment[] = []
+    let debtsToMigrate: Debt[] = []
+    let retirementToMigrate: RetirementAccount[] = []
+
+    if (storedBanks) {
+      try {
+        banksToMigrate = JSON.parse(storedBanks)
+      } catch (e) {
+        console.error('Failed to parse stored bank accounts:', e)
+      }
+    }
+    if (storedCash) {
+      try {
+        cashToMigrate = JSON.parse(storedCash)
+      } catch (e) {
+        console.error('Failed to parse stored cash:', e)
+      }
+    }
+    if (storedInvestments) {
+      try {
+        investmentsToMigrate = JSON.parse(storedInvestments)
+      } catch (e) {
+        console.error('Failed to parse stored investments:', e)
+      }
+    }
+    if (storedDebts) {
+      try {
+        debtsToMigrate = JSON.parse(storedDebts)
+      } catch (e) {
+        console.error('Failed to parse stored debts:', e)
+      }
+    }
+    if (storedRetirement) {
+      try {
+        retirementToMigrate = JSON.parse(storedRetirement)
+      } catch (e) {
+        console.error('Failed to parse stored retirement accounts:', e)
+      }
+    }
+
+    if (banksToMigrate.length > 0 || cashToMigrate.length > 0 || investmentsToMigrate.length > 0 || 
+        debtsToMigrate.length > 0 || retirementToMigrate.length > 0) {
+      const existingBanks = await loadBankAccountsFromSupabase()
+      const existingCash = await loadCashFromSupabase()
+      const existingInvestments = await loadInvestmentsFromSupabase()
+      const existingDebts = await loadDebtsFromSupabase()
+      const existingRetirement = await loadRetirementAccountsFromSupabase()
+
+      if (existingBanks.length === 0 && existingCash.length === 0 && existingInvestments.length === 0 &&
+          existingDebts.length === 0 && existingRetirement.length === 0) {
+        if (banksToMigrate.length > 0) {
+          await saveBankAccountsToSupabase(banksToMigrate)
+          console.log(`Migrated ${banksToMigrate.length} bank accounts to Supabase`)
+        }
+        if (cashToMigrate.length > 0) {
+          await saveCashToSupabase(cashToMigrate)
+          console.log(`Migrated ${cashToMigrate.length} cash items to Supabase`)
+        }
+        if (investmentsToMigrate.length > 0) {
+          await saveInvestmentsToSupabase(investmentsToMigrate)
+          console.log(`Migrated ${investmentsToMigrate.length} investments to Supabase`)
+        }
+        if (debtsToMigrate.length > 0) {
+          await saveDebtsToSupabase(debtsToMigrate)
+          console.log(`Migrated ${debtsToMigrate.length} debts to Supabase`)
+        }
+        if (retirementToMigrate.length > 0) {
+          await saveRetirementAccountsToSupabase(retirementToMigrate)
+          console.log(`Migrated ${retirementToMigrate.length} retirement accounts to Supabase`)
+        }
+      }
+    }
+
+    localStorage.setItem(migrationKey, 'true')
+  } catch (error) {
+    console.error('Error migrating localStorage to Supabase:', error)
+  }
+}
 
 // Exchange rate (you could fetch this from an API)
 const EXCHANGE_RATE = 18.3 // MXN to USD
@@ -60,8 +486,31 @@ export function useNetWorth() {
   const [investmentsInitialized, setInvestmentsInitialized] = useState(false)
   const hasFetchedPricesRef = useRef(false)
   const lastInvestmentsLengthRef = useRef(0)
+  const hasClearedDataRef = useRef(false)
 
   useEffect(() => {
+    const loadData = async () => {
+      // Try to migrate localStorage data first
+      await migrateLocalStorageToSupabase()
+
+      // Load from Supabase if configured, otherwise fall back to localStorage
+      if (isSupabaseConfigured()) {
+        const loadedBanks = await loadBankAccountsFromSupabase()
+        const loadedCash = await loadCashFromSupabase()
+        const loadedInvestments = await loadInvestmentsFromSupabase()
+        const loadedDebts = await loadDebtsFromSupabase()
+        const loadedRetirement = await loadRetirementAccountsFromSupabase()
+        
+        setBankAccounts(loadedBanks)
+        setCash(loadedCash)
+        setInvestments(loadedInvestments)
+        setDebts(loadedDebts)
+        setRetirementAccounts(loadedRetirement)
+        setInvestmentsInitialized(true)
+        hasFetchedPricesRef.current = false
+        lastInvestmentsLengthRef.current = loadedInvestments.length
+      } else {
+        // Fallback to localStorage
     const storedBanks = localStorage.getItem(BANK_ACCOUNTS_KEY)
     const storedCash = localStorage.getItem(CASH_KEY)
     const storedInvestments = localStorage.getItem(INVESTMENTS_KEY)
@@ -89,7 +538,6 @@ export function useNetWorth() {
         const loadedInvestments = JSON.parse(storedInvestments)
         setInvestments(loadedInvestments)
         setInvestmentsInitialized(true)
-        // Reset refs when loading from storage so prices can be fetched
         hasFetchedPricesRef.current = false
         lastInvestmentsLengthRef.current = loadedInvestments.length
       } catch (e) {
@@ -115,6 +563,59 @@ export function useNetWorth() {
         console.error('Failed to load retirement accounts:', e)
       }
     }
+      }
+    }
+
+    loadData()
+  }, [])
+
+  // Clear all net worth data except investments (one-time operation)
+  useEffect(() => {
+    if (hasClearedDataRef.current) return
+    
+    const clearDataOnce = async () => {
+      // Wait a bit for data to load first
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      // Clear bank accounts
+      setBankAccounts([])
+      if (isSupabaseConfigured()) {
+        await supabase.from('finance_bank_accounts').delete().neq('id', '')
+      } else {
+        localStorage.removeItem(BANK_ACCOUNTS_KEY)
+      }
+
+      // Clear cash
+      setCash([])
+      if (isSupabaseConfigured()) {
+        await supabase.from('finance_cash').delete().neq('id', '')
+      } else {
+        localStorage.removeItem(CASH_KEY)
+      }
+
+      // Keep investments - DO NOT CLEAR
+
+      // Clear debts
+      setDebts([])
+      if (isSupabaseConfigured()) {
+        await supabase.from('finance_debts').delete().neq('id', '')
+      } else {
+        localStorage.removeItem(DEBTS_KEY)
+      }
+
+      // Clear retirement accounts
+      setRetirementAccounts([])
+      if (isSupabaseConfigured()) {
+        await supabase.from('finance_retirement_accounts').delete().neq('id', '')
+      } else {
+        localStorage.removeItem(RETIREMENT_KEY)
+      }
+
+      hasClearedDataRef.current = true
+      console.log('Cleared all net worth data except investments')
+    }
+
+    clearDataOnce()
   }, [])
 
   // Fetch and update investment prices automatically on page load
@@ -287,149 +788,169 @@ export function useNetWorth() {
     return () => clearTimeout(timeoutId)
   }, [investmentsInitialized, investments.length]) // Run when investments are initialized
 
-  const saveBanks = (newBanks: BankAccount[]) => {
+  const saveBanks = async (newBanks: BankAccount[]) => {
     setBankAccounts(newBanks)
+    if (isSupabaseConfigured()) {
+      await saveBankAccountsToSupabase(newBanks)
+    } else {
     localStorage.setItem(BANK_ACCOUNTS_KEY, JSON.stringify(newBanks))
+    }
   }
 
-  const saveCash = (newCash: Cash[]) => {
+  const saveCash = async (newCash: Cash[]) => {
     setCash(newCash)
+    if (isSupabaseConfigured()) {
+      await saveCashToSupabase(newCash)
+    } else {
     localStorage.setItem(CASH_KEY, JSON.stringify(newCash))
+    }
   }
 
-  const saveInvestments = (newInvestments: Investment[]) => {
+  const saveInvestments = async (newInvestments: Investment[]) => {
     setInvestments(newInvestments)
+    if (isSupabaseConfigured()) {
+      await saveInvestmentsToSupabase(newInvestments)
+    } else {
     localStorage.setItem(INVESTMENTS_KEY, JSON.stringify(newInvestments))
+    }
   }
 
-  const saveDebts = (newDebts: Debt[]) => {
+  const saveDebts = async (newDebts: Debt[]) => {
     setDebts(newDebts)
+    if (isSupabaseConfigured()) {
+      await saveDebtsToSupabase(newDebts)
+    } else {
     localStorage.setItem(DEBTS_KEY, JSON.stringify(newDebts))
+    }
   }
 
-  const saveRetirement = (newRetirement: RetirementAccount[]) => {
+  const saveRetirement = async (newRetirement: RetirementAccount[]) => {
     setRetirementAccounts(newRetirement)
+    if (isSupabaseConfigured()) {
+      await saveRetirementAccountsToSupabase(newRetirement)
+    } else {
     localStorage.setItem(RETIREMENT_KEY, JSON.stringify(newRetirement))
+    }
   }
 
-  const addBankAccount = (bank: Omit<BankAccount, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addBankAccount = async (bank: Omit<BankAccount, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newBank: BankAccount = {
       ...bank,
       id: Date.now().toString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    saveBanks([...bankAccounts, newBank])
+    await saveBanks([...bankAccounts, newBank])
     return newBank
   }
 
-  const updateBankAccount = (id: string, updates: Partial<BankAccount>) => {
+  const updateBankAccount = async (id: string, updates: Partial<BankAccount>) => {
     const updated = bankAccounts.map(b => 
       b.id === id 
         ? { ...b, ...updates, updatedAt: new Date().toISOString() }
         : b
     )
-    saveBanks(updated)
+    await saveBanks(updated)
   }
 
-  const deleteBankAccount = (id: string) => {
-    saveBanks(bankAccounts.filter(b => b.id !== id))
+  const deleteBankAccount = async (id: string) => {
+    await saveBanks(bankAccounts.filter(b => b.id !== id))
   }
 
-  const addCash = (cashItem: Omit<Cash, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addCash = async (cashItem: Omit<Cash, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newCashItem: Cash = {
       ...cashItem,
       id: Date.now().toString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    saveCash([...cash, newCashItem])
+    await saveCash([...cash, newCashItem])
     return newCashItem
   }
 
-  const updateCash = (id: string, updates: Partial<Cash>) => {
+  const updateCash = async (id: string, updates: Partial<Cash>) => {
     const updated = cash.map(c => 
       c.id === id 
         ? { ...c, ...updates, updatedAt: new Date().toISOString() }
         : c
     )
-    saveCash(updated)
+    await saveCash(updated)
   }
 
-  const deleteCash = (id: string) => {
-    saveCash(cash.filter(c => c.id !== id))
+  const deleteCash = async (id: string) => {
+    await saveCash(cash.filter(c => c.id !== id))
   }
 
-  const addInvestment = (investment: Omit<Investment, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addInvestment = async (investment: Omit<Investment, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newInvestment: Investment = {
       ...investment,
       id: Date.now().toString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    saveInvestments([...investments, newInvestment])
+    await saveInvestments([...investments, newInvestment])
     return newInvestment
   }
 
-  const updateInvestment = (id: string, updates: Partial<Investment>) => {
+  const updateInvestment = async (id: string, updates: Partial<Investment>) => {
     const updated = investments.map(i => 
       i.id === id 
         ? { ...i, ...updates, updatedAt: new Date().toISOString() }
         : i
     )
-    saveInvestments(updated)
+    await saveInvestments(updated)
   }
 
-  const deleteInvestment = (id: string) => {
-    saveInvestments(investments.filter(i => i.id !== id))
+  const deleteInvestment = async (id: string) => {
+    await saveInvestments(investments.filter(i => i.id !== id))
   }
 
-  const addDebt = (debt: Omit<Debt, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addDebt = async (debt: Omit<Debt, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newDebt: Debt = {
       ...debt,
       id: Date.now().toString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    saveDebts([...debts, newDebt])
+    await saveDebts([...debts, newDebt])
     return newDebt
   }
 
-  const updateDebt = (id: string, updates: Partial<Debt>) => {
+  const updateDebt = async (id: string, updates: Partial<Debt>) => {
     const updated = debts.map(d => 
       d.id === id 
         ? { ...d, ...updates, updatedAt: new Date().toISOString() }
         : d
     )
-    saveDebts(updated)
+    await saveDebts(updated)
   }
 
-  const deleteDebt = (id: string) => {
-    saveDebts(debts.filter(d => d.id !== id))
+  const deleteDebt = async (id: string) => {
+    await saveDebts(debts.filter(d => d.id !== id))
   }
 
-  const addRetirementAccount = (account: Omit<RetirementAccount, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addRetirementAccount = async (account: Omit<RetirementAccount, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newAccount: RetirementAccount = {
       ...account,
       id: Date.now().toString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    saveRetirement([...retirementAccounts, newAccount])
+    await saveRetirement([...retirementAccounts, newAccount])
     return newAccount
   }
 
-  const updateRetirementAccount = (id: string, updates: Partial<RetirementAccount>) => {
+  const updateRetirementAccount = async (id: string, updates: Partial<RetirementAccount>) => {
     const updated = retirementAccounts.map(a => 
       a.id === id 
         ? { ...a, ...updates, updatedAt: new Date().toISOString() }
         : a
     )
-    saveRetirement(updated)
+    await saveRetirement(updated)
   }
 
-  const deleteRetirementAccount = (id: string) => {
-    saveRetirement(retirementAccounts.filter(a => a.id !== id))
+  const deleteRetirementAccount = async (id: string) => {
+    await saveRetirement(retirementAccounts.filter(a => a.id !== id))
   }
 
   const getNetWorthSummary = (): NetWorthSummary => {
@@ -505,245 +1026,82 @@ export function useNetWorth() {
     }
   }
 
-  const seedMockData = () => {
-    const now = new Date().toISOString()
+  const clearAllNetWorthData = async () => {
+    // Clear bank accounts
+    setBankAccounts([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_bank_accounts').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(BANK_ACCOUNTS_KEY)
+    }
 
-    // Mock Cash
-    const mockCash: Cash[] = [
-      {
-        id: 'cash-1',
-        name: 'Pesos',
-        type: 'pesos',
-        amountMXN: 0,
-        amountUSD: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'cash-2',
-        name: 'Dolares',
-        type: 'dollars',
-        amountMXN: 2105.59,
-        amountUSD: 115.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]
+    // Clear cash
+    setCash([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_cash').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(CASH_KEY)
+    }
 
-    // Mock Bank Accounts
-    const mockBanks: BankAccount[] = [
-      {
-        id: 'bank-1',
-        name: 'Santander Ahorros',
-        bankName: 'Santander',
-        accountType: 'savings',
-        balanceMXN: 0,
-        balanceUSD: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'bank-1b',
-        name: 'Santander Credit Card',
-        bankName: 'Santander',
-        accountType: 'credit-card',
-        balanceMXN: 0,
-        balanceUSD: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'bank-2',
-        name: 'BofA CC',
-        bankName: 'Bank of America',
-        accountType: 'credit-card',
-        balanceMXN: 0,
-        balanceUSD: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'bank-3',
-        name: 'BofA Ahorros',
-        bankName: 'Bank of America',
-        accountType: 'savings',
-        balanceMXN: 0,
-        balanceUSD: 150.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'bank-4',
-        name: 'SOFI',
-        bankName: 'SOFI',
-        accountType: 'checking',
-        balanceMXN: 0,
-        balanceUSD: 99.50,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'bank-5',
-        name: 'CHASE CC',
-        bankName: 'Chase',
-        accountType: 'credit-card',
-        balanceMXN: 0,
-        balanceUSD: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'bank-6',
-        name: 'CHASE Ahorros',
-        bankName: 'Chase',
-        accountType: 'savings',
-        balanceMXN: 0,
-        balanceUSD: 100.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]
+    // Clear investments
+    setInvestments([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_investments').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(INVESTMENTS_KEY)
+    }
 
-    // Mock Investments - ETFs total should be $10,249.06 USD, Cryptos $1,323.70 USD
-    const mockInvestments: Investment[] = [
-      {
-        id: 'inv-1',
-        name: 'VGT',
-        type: 'etf',
-        quantity: 15,
-        valueMXN: 183150.00,
-        valueUSD: 10000.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'inv-2',
-        name: 'VOO',
-        type: 'etf',
-        quantity: 20,
-        valueMXN: 0,
-        valueUSD: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'inv-3',
-        name: 'VTI',
-        type: 'etf',
-        quantity: 25,
-        valueMXN: 0,
-        valueUSD: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'inv-4',
-        name: 'VUG',
-        type: 'etf',
-        quantity: 10,
-        valueMXN: 0,
-        valueUSD: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'inv-5',
-        name: 'FIDELITY 401K',
-        type: '401k',
-        quantity: 0,
-        valueMXN: 457.00,
-        valueUSD: 249.06,
-        createdAt: now,
-        updatedAt: now,
-      },
-      // Cryptos total should be $1,323.70 USD
-      {
-        id: 'inv-6',
-        name: 'Bitcoin',
-        type: 'crypto',
-        valueMXN: 12870.00,
-        valueUSD: 703.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'inv-7',
-        name: 'Ethereum',
-        type: 'crypto',
-        valueMXN: 5490.00,
-        valueUSD: 300.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'inv-8',
-        name: 'XRP',
-        type: 'crypto',
-        valueMXN: 3660.00,
-        valueUSD: 200.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'inv-9',
-        name: 'Dogecoin',
-        type: 'crypto',
-        valueMXN: 366.00,
-        valueUSD: 20.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]
+    // Clear debts
+    setDebts([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_debts').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(DEBTS_KEY)
+    }
 
-    // Mock Debts
-    const mockDebts: Debt[] = [
-      {
-        id: 'debt-1',
-        name: 'Sobrante de Piloto',
-        type: 'i-owe',
-        amountMXN: 0,
-        amountUSD: 1026.71,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'debt-2',
-        name: 'Deposito Renta lugar',
-        type: 'owed-to-me',
-        amountMXN: 0,
-        amountUSD: 350.00,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]
+    // Clear retirement accounts
+    setRetirementAccounts([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_retirement_accounts').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(RETIREMENT_KEY)
+    }
+  }
 
-    // Mock Retirement Accounts
-    const mockRetirement: RetirementAccount[] = [
-      {
-        id: 'ret-1',
-        name: 'Afore Alexis',
-        type: 'afore',
-        valueMXN: 269226.00,
-        valueUSD: 14719.95,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'ret-2',
-        name: 'Infonavit Alexis',
-        type: 'infonavit',
-        valueMXN: 177000.00,
-        valueUSD: 9667.22,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]
+  const clearAllNetWorthDataExceptInvestments = async () => {
+    // Clear bank accounts
+    setBankAccounts([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_bank_accounts').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(BANK_ACCOUNTS_KEY)
+    }
 
-    saveCash(mockCash)
-    saveBanks(mockBanks)
-    saveInvestments(mockInvestments)
-    saveDebts(mockDebts)
-    saveRetirement(mockRetirement)
+    // Clear cash
+    setCash([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_cash').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(CASH_KEY)
+    }
+
+    // Keep investments - DO NOT CLEAR
+
+    // Clear debts
+    setDebts([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_debts').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(DEBTS_KEY)
+    }
+
+    // Clear retirement accounts
+    setRetirementAccounts([])
+    if (isSupabaseConfigured()) {
+      await supabase.from('finance_retirement_accounts').delete().neq('id', '')
+    } else {
+      localStorage.removeItem(RETIREMENT_KEY)
+    }
   }
 
   return {
@@ -768,7 +1126,8 @@ export function useNetWorth() {
     updateRetirementAccount,
     deleteRetirementAccount,
     getNetWorthSummary,
-    seedMockData,
+    clearAllNetWorthData,
+    clearAllNetWorthDataExceptInvestments,
   }
 }
 

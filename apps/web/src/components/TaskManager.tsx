@@ -313,6 +313,20 @@ const storyPointsToHoursDisplay = (points?: number): string => {
   return minutes > 0 ? `${wholeHours} hrs ${minutes} min` : `${wholeHours} hrs`
 }
 
+// Helper function to convert hours to story points
+// 1 hour = 1 story point (direct mapping)
+const hoursToStoryPoints = (hours: number): number => {
+  if (!hours || hours <= 0) return 1 // Default to 1 story point if no hours
+  return hours // Direct mapping: hours = story points
+}
+
+// Helper function to convert story points to hours
+// 1 story point = 1 hour (direct mapping)
+const storyPointsToHours = (points?: number): number => {
+  if (!points || points <= 0) return 1 // Default to 1 hour if no points
+  return points // Direct mapping: story points = hours
+}
+
 // Gantt Subtask Card Component
 // Custom comparison to ensure re-render when status changes
 const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
@@ -333,8 +347,75 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
   onDragStartCallback?: (data: { type: 'subtask', projectId: string, taskId: string, subtaskId: string }) => void
 }) {
   const [isDragging, setIsDragging] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editingName, setEditingName] = useState(subtask.name)
+  const [editingHours, setEditingHours] = useState<string>(String(storyPointsToHours(subtask.storyPoints)))
+  const [lastClickInfo, setLastClickInfo] = useState<{ time: number } | null>(null)
+
+  const handleDragEnd = () => {
+    setIsDragging(false)
+  }
+
+  // Handle click for manual double-click detection
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const now = Date.now()
+    
+    // Check if this is a double-click (within 300ms)
+    if (lastClickInfo && now - lastClickInfo.time < 300) {
+      e.preventDefault()
+      setIsEditing(true)
+      setEditingName(subtask.name)
+      setEditingHours(String(storyPointsToHours(subtask.storyPoints)))
+      setLastClickInfo(null)
+    } else {
+      // Store this click for potential double-click
+      setLastClickInfo({ time: now })
+      setTimeout(() => {
+        setLastClickInfo(prev => prev?.time === now ? null : prev)
+      }, 300)
+    }
+  }
+
+  // Also keep native double-click as fallback
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    setIsEditing(true)
+    setEditingName(subtask.name)
+    setEditingHours(storyPointsToHours(subtask.storyPoints))
+    setLastClickInfo(null)
+  }
+
+  const handleSaveEdit = () => {
+    const hoursValue = parseFloat(editingHours) || 0.5
+    onUpdate({
+      name: editingName.trim() || subtask.name,
+      storyPoints: hoursToStoryPoints(hoursValue),
+    })
+    setIsEditing(false)
+  }
+
+  const handleCancelEdit = () => {
+    setIsEditing(false)
+    setEditingName(subtask.name)
+    setEditingHours(String(storyPointsToHours(subtask.storyPoints)))
+  }
 
   const handleDragStart = (e: React.DragEvent) => {
+    if (isEditing) {
+      e.preventDefault()
+      return
+    }
+    // Prevent drag if this might be a double-click attempt
+    if (lastClickInfo) {
+      const timeSinceClick = Date.now() - lastClickInfo.time
+      if (timeSinceClick < 400) {
+        e.preventDefault()
+        setLastClickInfo(null)
+        return
+      }
+    }
     setIsDragging(true)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', `gantt-subtask:${parentProject.id}:${parentTask.id}:${subtask.id}`)
@@ -345,10 +426,7 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
     if (e.currentTarget instanceof HTMLElement) {
       e.dataTransfer.setDragImage(e.currentTarget, e.currentTarget.offsetWidth / 2, e.currentTarget.offsetHeight / 2)
     }
-  }
-
-  const handleDragEnd = () => {
-    setIsDragging(false)
+    setLastClickInfo(null)
   }
 
   const isCompleted = subtask.status === 'completed'
@@ -371,12 +449,17 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
 
   return (
     <div
-      draggable
+      draggable={!isEditing}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      title={!isEditing ? "Double-click to edit" : ""}
       className={`group relative rounded-md border border-slate-200 backdrop-blur-sm p-2.5 smooth-transition ${
         isCompleted 
           ? "opacity-60 cursor-not-allowed" 
+          : isEditing
+          ? "ring-2 ring-blue-400 cursor-default min-w-[200px]"
           : isDragging
           ? "border-blue-300 bg-blue-50 shadow-sm opacity-75 cursor-grabbing"
           : "hover:bg-slate-100 hover:border-slate-300 cursor-move"
@@ -413,7 +496,7 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
             </svg>
           )}
         </button>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 overflow-hidden">
           {/* Project and Task tags at the top */}
           <div className="flex items-center gap-1 mb-1.5 flex-wrap">
             <span 
@@ -433,19 +516,83 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
             </span>
           </div>
           
-          <p
-            className={`text-[11px] leading-snug break-words ${
-              isCompleted ? "line-through text-slate-400" : "text-slate-600"
-            }`}
-            title={subtask.name}
-          >
-            {subtask.name}
-          </p>
-          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-            {/* Estimate hours - prominent display */}
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-800 text-white border border-slate-900">
-              {storyPointsToHoursDisplay(subtask.storyPoints)}
-            </span>
+          {isEditing ? (
+            <div className="space-y-2 min-w-0">
+              <input
+                type="text"
+                value={editingName}
+                onChange={(e) => setEditingName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSaveEdit()
+                  } else if (e.key === 'Escape') {
+                    handleCancelEdit()
+                  }
+                }}
+                className="w-full px-2 py-1.5 text-[11px] border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="Subtask name"
+                autoFocus
+              />
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="text-[10px] text-slate-600 whitespace-nowrap">Hours:</label>
+                <input
+                  type="number"
+                  min="0.5"
+                  step="0.5"
+                  value={editingHours}
+                  onChange={(e) => {
+                    // Allow any input during editing - store as string
+                    setEditingHours(e.target.value)
+                  }}
+                  onBlur={(e) => {
+                    // Ensure we have a valid value when input loses focus
+                    const value = parseFloat(e.target.value)
+                    if (isNaN(value) || value <= 0) {
+                      setEditingHours('0.5')
+                    } else {
+                      setEditingHours(String(value))
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleSaveEdit()
+                    } else if (e.key === 'Escape') {
+                      handleCancelEdit()
+                    }
+                  }}
+                  className="w-16 px-2 py-1.5 text-[10px] border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 flex-shrink-0"
+                />
+                <div className="flex gap-1.5 ml-auto flex-shrink-0">
+                  <button
+                    onClick={handleSaveEdit}
+                    className="px-2.5 py-1 text-[10px] font-medium bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors whitespace-nowrap"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={handleCancelEdit}
+                    className="px-2.5 py-1 text-[10px] font-medium bg-slate-300 hover:bg-slate-400 text-slate-800 rounded transition-colors whitespace-nowrap"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p
+                className={`text-[11px] leading-snug break-words ${
+                  isCompleted ? "line-through text-slate-400" : "text-slate-600"
+                }`}
+                title={subtask.name}
+              >
+                {subtask.name}
+              </p>
+              <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                {/* Estimate hours - prominent display */}
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-800 text-white border border-slate-900">
+                  {storyPointsToHoursDisplay(subtask.storyPoints)}
+                </span>
             {subtask.priority && (
               <span className={`text-[8px] px-1 py-0.5 rounded border ${
                 subtask.priority === 'urgent' 
@@ -460,24 +607,28 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
               </span>
             )}
           </div>
+            </>
+          )}
         </div>
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 smooth-transition">
-          <button
-            type="button"
-            draggable={false}
-            onClick={(e) => {
-              e.stopPropagation()
-              e.preventDefault()
-              onDelete()
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="p-1 text-slate-400 hover:text-red-500 rounded hover:bg-red-50 smooth-transition"
-          >
-            <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+        {!isEditing && (
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 smooth-transition">
+            <button
+              type="button"
+              draggable={false}
+              onClick={(e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                onDelete()
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              className="p-1 text-slate-400 hover:text-red-500 rounded hover:bg-red-50 smooth-transition"
+            >
+              <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -487,6 +638,7 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
     prevProps.subtask.id === nextProps.subtask.id &&
     prevProps.subtask.status === nextProps.subtask.status &&
     prevProps.subtask.name === nextProps.subtask.name &&
+    prevProps.subtask.storyPoints === nextProps.subtask.storyPoints &&
     prevProps.parentTask.id === nextProps.parentTask.id &&
     prevProps.parentProject.id === nextProps.parentProject.id &&
     prevProps.columnStatus === nextProps.columnStatus
@@ -510,8 +662,71 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
   onDragStartCallback?: (data: { type: 'task', projectId: string, taskId: string }) => void
 }) {
   const [isDragging, setIsDragging] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editingName, setEditingName] = useState(task.name)
+  const [editingHours, setEditingHours] = useState<string>(String(storyPointsToHours((task as any).totalPoints)))
+  const [lastClickInfo, setLastClickInfo] = useState<{ time: number } | null>(null)
+
+  // Handle click for manual double-click detection
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const now = Date.now()
+    
+    // Check if this is a double-click (within 300ms)
+    if (lastClickInfo && now - lastClickInfo.time < 300) {
+      e.preventDefault()
+      setIsEditing(true)
+      setEditingName(task.name)
+      setEditingHours(storyPointsToHours((task as any).totalPoints))
+      setLastClickInfo(null)
+    } else {
+      // Store this click for potential double-click
+      setLastClickInfo({ time: now })
+      setTimeout(() => {
+        setLastClickInfo(prev => prev?.time === now ? null : prev)
+      }, 300)
+    }
+  }
+
+  // Also keep native double-click as fallback
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    setIsEditing(true)
+    setEditingName(task.name)
+    setEditingHours(storyPointsToHours((task as any).totalPoints))
+    setLastClickInfo(null)
+  }
+
+  const handleSaveEdit = () => {
+    const hoursValue = parseFloat(editingHours) || 0.5
+    onUpdate({
+      name: editingName.trim() || task.name,
+      totalPoints: hoursToStoryPoints(hoursValue),
+    } as any)
+    setIsEditing(false)
+  }
+
+  const handleCancelEdit = () => {
+    setIsEditing(false)
+    setEditingName(task.name)
+    setEditingHours(String(storyPointsToHours((task as any).totalPoints)))
+  }
 
   const handleDragStart = (e: React.DragEvent) => {
+    if (isEditing) {
+      e.preventDefault()
+      return
+    }
+    // Prevent drag if this might be a double-click attempt
+    if (lastClickInfo) {
+      const timeSinceClick = Date.now() - lastClickInfo.time
+      if (timeSinceClick < 400) {
+        e.preventDefault()
+        setLastClickInfo(null)
+        return
+      }
+    }
     setIsDragging(true)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', `gantt-task:${parentProject.id}:${task.id}`)
@@ -522,6 +737,7 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
     if (e.currentTarget instanceof HTMLElement) {
       e.dataTransfer.setDragImage(e.currentTarget, e.currentTarget.offsetWidth / 2, e.currentTarget.offsetHeight / 2)
     }
+    setLastClickInfo(null)
   }
 
   const handleDragEnd = () => {
@@ -548,12 +764,17 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
 
   return (
     <div
-      draggable
+      draggable={!isEditing}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      title={!isEditing ? "Double-click to edit" : ""}
       className={`group relative rounded-md border border-slate-200 backdrop-blur-sm p-2.5 smooth-transition ${
         isCompleted 
           ? "opacity-60 cursor-not-allowed" 
+          : isEditing
+          ? "ring-2 ring-blue-400 cursor-default min-w-[200px]"
           : isDragging
           ? "border-blue-300 bg-blue-50 shadow-sm opacity-75 cursor-grabbing"
           : "hover:bg-slate-100 hover:border-slate-300 cursor-move"
@@ -590,7 +811,7 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
             </svg>
           )}
         </button>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 overflow-hidden">
           {/* Project tag at the top */}
           <div className="flex items-center gap-1 mb-1.5 flex-wrap">
             <span 
@@ -609,19 +830,83 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
           </div>
           
           {/* Task name */}
-          <p 
-            className={`text-xs font-medium text-slate-800 mb-1.5 break-words ${isCompleted ? 'line-through' : ''}`}
-            title={task.name || '(Untitled Task)'}
-          >
-            {task.name || '(Untitled Task)'}
-          </p>
-          
-          {/* Priority and Hours */}
-          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-            {/* Estimate hours - prominent display */}
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-800 text-white border border-slate-900">
-              {storyPointsToHoursDisplay((task as any).totalPoints)}
-            </span>
+          {isEditing ? (
+            <div className="space-y-2 min-w-0">
+              <input
+                type="text"
+                value={editingName}
+                onChange={(e) => setEditingName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSaveEdit()
+                  } else if (e.key === 'Escape') {
+                    handleCancelEdit()
+                  }
+                }}
+                className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="Task name"
+                autoFocus
+              />
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="text-[10px] text-slate-600 whitespace-nowrap">Hours:</label>
+                <input
+                  type="number"
+                  min="0.5"
+                  step="0.5"
+                  value={editingHours}
+                  onChange={(e) => {
+                    // Allow any input during editing - store as string
+                    setEditingHours(e.target.value)
+                  }}
+                  onBlur={(e) => {
+                    // Ensure we have a valid value when input loses focus
+                    const value = parseFloat(e.target.value)
+                    if (isNaN(value) || value <= 0) {
+                      setEditingHours('0.5')
+                    } else {
+                      setEditingHours(String(value))
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleSaveEdit()
+                    } else if (e.key === 'Escape') {
+                      handleCancelEdit()
+                    }
+                  }}
+                  className="w-16 px-2 py-1.5 text-[10px] border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 flex-shrink-0"
+                />
+                <div className="flex gap-1.5 ml-auto flex-shrink-0">
+                  <button
+                    onClick={handleSaveEdit}
+                    className="px-2.5 py-1 text-[10px] font-medium bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors whitespace-nowrap"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={handleCancelEdit}
+                    className="px-2.5 py-1 text-[10px] font-medium bg-slate-300 hover:bg-slate-400 text-slate-800 rounded transition-colors whitespace-nowrap"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p 
+                className={`text-xs font-medium text-slate-800 mb-1.5 break-words ${isCompleted ? 'line-through' : ''}`}
+                title={task.name || '(Untitled Task)'}
+              >
+                {task.name || '(Untitled Task)'}
+              </p>
+              
+              {/* Priority and Hours */}
+              <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                {/* Estimate hours - prominent display */}
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-800 text-white border border-slate-900">
+                  {storyPointsToHoursDisplay((task as any).totalPoints)}
+                </span>
             {task.priority && (
               <span className={`text-[8px] px-1.5 py-0.5 rounded font-medium ${
                 task.priority === 'urgent' ? 'bg-red-100 text-red-800' :
@@ -632,25 +917,29 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
                 {task.priority}
               </span>
             )}
-          </div>
+              </div>
+            </>
+          )}
         </div>
         
         {/* Delete button */}
-        <button
-          type="button"
-          draggable={false}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            onDelete()
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-          className="p-1 text-slate-400 hover:text-red-500 rounded hover:bg-red-50 smooth-transition opacity-0 group-hover:opacity-100"
-        >
-          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+        {!isEditing && (
+          <button
+            type="button"
+            draggable={false}
+            onClick={(e) => {
+              e.stopPropagation()
+              e.preventDefault()
+              onDelete()
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="p-1 text-slate-400 hover:text-red-500 rounded hover:bg-red-50 smooth-transition opacity-0 group-hover:opacity-100"
+          >
+            <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   )
@@ -660,6 +949,7 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
     prevProps.task.id === nextProps.task.id &&
     prevProps.task.status === nextProps.task.status &&
     prevProps.task.name === nextProps.task.name &&
+    (prevProps.task as any).totalPoints === (nextProps.task as any).totalPoints &&
     prevProps.parentProject.id === nextProps.parentProject.id &&
     prevProps.columnStatus === nextProps.columnStatus
   )
@@ -866,8 +1156,18 @@ export default function TaskManager() {
   const [isCreatingRoutineTask, setIsCreatingRoutineTask] = useState(false)
   const [newRoutineTaskName, setNewRoutineTaskName] = useState('')
   const [newRoutineTaskHours, setNewRoutineTaskHours] = useState<number>(1)
+  // State for editing scheduled blocks in weekly plan
+  const [editingScheduledBlockId, setEditingScheduledBlockId] = useState<string | null>(null)
+  const [editingBlockName, setEditingBlockName] = useState('')
+  const [editingBlockHours, setEditingBlockHours] = useState<string>('1')
+  // Track clicks for manual double-click detection (needed because draggable interferes with native double-click)
+  const [lastClickInfo, setLastClickInfo] = useState<{ id: string; time: number } | null>(null)
+  // Force re-render after updates
+  const [updateTrigger, setUpdateTrigger] = useState(0)
   // Store routine task instances that have been scheduled (so they can be dragged multiple times)
-  const [routineInstances, setRoutineInstances] = useState<Array<{
+  const ROUTINE_INSTANCES_KEY = 'jarvis_routine_instances'
+  
+  type RoutineInstance = {
     id: string
     originalId: string
     projectId: string
@@ -883,7 +1183,37 @@ export default function TaskManager() {
     taskColor?: string
     projectName: string
     taskName?: string
-  }>>([])
+  }
+  
+  // Load routine instances from localStorage on mount
+  const [routineInstances, setRoutineInstances] = useState<Array<RoutineInstance>>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem(ROUTINE_INSTANCES_KEY)
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored)
+          // Filter out instances that are too old (older than 2 weeks) to prevent localStorage bloat
+          const twoWeeksAgo = new Date()
+          twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14)
+          return parsed.filter((inst: RoutineInstance) => {
+            const instanceDate = new Date(inst.startDate)
+            return instanceDate >= twoWeeksAgo
+          })
+        } catch (e) {
+          console.error('Failed to load routine instances:', e)
+          return []
+        }
+      }
+    }
+    return []
+  })
+  
+  // Save routine instances to localStorage whenever they change
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(ROUTINE_INSTANCES_KEY, JSON.stringify(routineInstances))
+    }
+  }, [routineInstances])
   const [resizeStartCol, setResizeStartCol] = useState<number>(0)
 
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null)
@@ -1191,7 +1521,7 @@ export default function TaskManager() {
         ganttTasks: tasksWithoutSubtasks,
       }
     })
-  }, [projects])
+  }, [projects, updateTrigger])
 
   // Group subtasks by their parent task's status/column for board view
   // Each subtask should only appear in one column (priority: explicit assignment > sprint > today > status)
@@ -1531,11 +1861,11 @@ export default function TaskManager() {
   // Routine tasks stay in the column even when scheduled (they can be dragged multiple times)
   const routineTasksForSchedule = useMemo(() => {
     return groupedGanttSubtasks.find(c => c.status === 'routine')?.ganttTasks || []
-  }, [groupedGanttSubtasks])
+  }, [groupedGanttSubtasks, updateTrigger, projects])
 
   const routineSubtasksForSchedule = useMemo(() => {
     return groupedGanttSubtasks.find(c => c.status === 'routine')?.ganttSubtasks || []
-  }, [groupedGanttSubtasks])
+  }, [groupedGanttSubtasks, updateTrigger, projects])
 
   // Handle creating a routine task
   const handleCreateRoutineTask = () => {
@@ -1555,33 +1885,36 @@ export default function TaskManager() {
       // Wait for state to update before adding task
       // Use setTimeout to ensure the project is in state
       setTimeout(() => {
-        // Find the project in the updated state
-        const updatedProject = projects.find(p => p.id === projectId)
-        if (updatedProject) {
           // Create the task in the Routine project
+        // We have the projectId, so we don't need to find the project
           const newTask = addGanttTask(projectId, newRoutineTaskName.trim())
           
           // Set task status to routine and set hours (totalPoints)
+        // updateTask now uses functional updates, so it will use the latest state
+        setTimeout(() => {
           updateGanttTask(projectId, newTask.id, {
             status: 'routine' as GanttStatus,
             totalPoints: newRoutineTaskHours,
           } as any)
-        }
+        }, 50)
         
         // Reset form
         setIsCreatingRoutineTask(false)
         setNewRoutineTaskName('')
         setNewRoutineTaskHours(1)
-      }, 150)
+      }, 100)
     } else {
       // Project already exists, create task immediately
       const newTask = addGanttTask(routineProject.id, newRoutineTaskName.trim())
       
       // Set task status to routine and set hours (totalPoints)
+      // updateTask now uses functional updates, so it will use the latest state
+      setTimeout(() => {
       updateGanttTask(routineProject.id, newTask.id, {
         status: 'routine' as GanttStatus,
         totalPoints: newRoutineTaskHours,
       } as any)
+      }, 50)
 
       // Reset form
       setIsCreatingRoutineTask(false)
@@ -3532,11 +3865,169 @@ export default function TaskManager() {
                                 }
                               })
                               
-                              return layoutItems.map(({ item, heightPixels, widthPercent, leftPercent }) => (
+                              return layoutItems.map(({ item, heightPixels, widthPercent, leftPercent }) => {
+                                // Check if this is a routine instance
+                                const isRoutineInstance = item.id.startsWith('routine-instance-')
+                                const isEditing = editingScheduledBlockId === item.id
+                                
+                                // Handle delete/unschedule
+                                const handleDelete = (e: React.MouseEvent) => {
+                                  e.stopPropagation()
+                                  e.preventDefault()
+                                  
+                                  if (isRoutineInstance) {
+                                    // Remove from routine instances
+                                    setRoutineInstances(prev => prev.filter(instance => instance.id !== item.id))
+                                  } else {
+                                    // Clear startDate/endDate for regular tasks/subtasks
+                                    if (item.type === 'task' && item.taskId && updateGanttTask) {
+                                      updateGanttTask(item.projectId, item.taskId, {
+                                        startDate: '',
+                                        endDate: '',
+                                      } as any)
+                                    } else if (item.type === 'subtask' && item.taskId && item.subtaskId && updateGanttSubtask) {
+                                      updateGanttSubtask(item.projectId, item.taskId, item.subtaskId, {
+                                        startDate: '',
+                                        endDate: '',
+                                      } as any)
+                                    }
+                                  }
+                                }
+                                
+                                // Handle click for manual double-click detection
+                                const handleClick = (e: React.MouseEvent) => {
+                                  e.stopPropagation()
+                                  const now = Date.now()
+                                  
+                                  // Check if this is a double-click (within 300ms and same item)
+                                  if (lastClickInfo && 
+                                      lastClickInfo.id === item.id && 
+                                      now - lastClickInfo.time < 300) {
+                                    e.preventDefault()
+                                    setEditingScheduledBlockId(item.id)
+                                    setEditingBlockName(item.name)
+                                    setEditingBlockHours(String(item.durationHours))
+                                    setLastClickInfo(null) // Reset after handling
+                                  } else {
+                                    // Store this click for potential double-click
+                                    setLastClickInfo({ id: item.id, time: now })
+                                    // Clear after timeout to prevent stale double-clicks
+                                    setTimeout(() => {
+                                      setLastClickInfo(prev => 
+                                        prev?.id === item.id ? null : prev
+                                      )
+                                    }, 300)
+                                  }
+                                }
+                                
+                                // Also keep native double-click as fallback
+                                const handleDoubleClick = (e: React.MouseEvent) => {
+                                  e.stopPropagation()
+                                  e.preventDefault()
+                                  setEditingScheduledBlockId(item.id)
+                                  setEditingBlockName(item.name)
+                                  setEditingBlockHours(item.durationHours)
+                                  setLastClickInfo(null) // Reset
+                                }
+                                
+                                // Handle save edits
+                                const handleSaveEdit = () => {
+                                  const hoursValue = parseFloat(editingBlockHours) || 0.5
+                                  if (isRoutineInstance) {
+                                    // Update routine instance first - this updates the scheduled block immediately
+                                    setRoutineInstances(prev => prev.map(inst => {
+                                      if (inst.id === item.id) {
+                                        const startDate = new Date(inst.startDate)
+                                        const newEndDate = new Date(startDate.getTime() + hoursValue * 60 * 60 * 1000)
+                                        return {
+                                          ...inst,
+                                          name: editingBlockName.trim() || inst.name,
+                                          totalPoints: item.type === 'task' ? hoursValue : undefined,
+                                          storyPoints: item.type === 'subtask' ? hoursValue : undefined,
+                                          dueDate: newEndDate.toISOString(), // Update endDate based on new duration
+                                        }
+                                      }
+                                      return inst
+                                    }))
+                                    
+                                    // Update the original routine task in the Routine project
+                                    // This ensures the sidebar shows the updated hours
+                                    // Use a longer delay to ensure projects state has updated
+                                    if (item.type === 'task' && item.taskId && item.projectId && updateGanttTask) {
+                                      updateGanttTask(item.projectId, item.taskId, {
+                                        name: editingBlockName.trim() || item.name,
+                                        totalPoints: hoursValue,
+                                      } as any)
+                                    } else if (item.type === 'subtask' && item.taskId && item.subtaskId && item.projectId && updateGanttSubtask) {
+                                      updateGanttSubtask(item.projectId, item.taskId, item.subtaskId, {
+                                        name: editingBlockName.trim() || item.name,
+                                        storyPoints: hoursValue,
+                                      } as any)
+                                    }
+                                    
+                                    // Force a re-render to ensure UI updates
+                                    // Use a longer delay to ensure state updates have propagated through the context
+                                    setTimeout(() => {
+                                      setUpdateTrigger(prev => prev + 1)
+                                    }, 100)
+                                  } else {
+                                    // Update regular task/subtask - recalculate endDate based on new hours
+                                    const startDate = new Date(item.startDate)
+                                    const newEndDate = new Date(startDate.getTime() + hoursValue * 60 * 60 * 1000)
+                                    
+                                    if (item.type === 'task' && item.taskId && updateGanttTask) {
+                                      updateGanttTask(item.projectId, item.taskId, {
+                                        name: editingBlockName.trim() || item.name,
+                                        totalPoints: hoursValue,
+                                        endDate: newEndDate.toISOString(),
+                                      } as any)
+                                    } else if (item.type === 'subtask' && item.taskId && item.subtaskId && updateGanttSubtask) {
+                                      updateGanttSubtask(item.projectId, item.taskId, item.subtaskId, {
+                                        name: editingBlockName.trim() || item.name,
+                                        storyPoints: hoursValue,
+                                        endDate: newEndDate.toISOString(),
+                                      } as any)
+                                    }
+                                  }
+                                  setEditingScheduledBlockId(null)
+                                  setEditingBlockName('')
+                                  setEditingBlockHours('1')
+                                }
+                                
+                                // Handle cancel edit
+                                const handleCancelEdit = () => {
+                                  setEditingScheduledBlockId(null)
+                                  setEditingBlockName('')
+                                  setEditingBlockHours('1')
+                                }
+                                
+                                // Calculate minimum height for edit mode (to fit all editing fields)
+                                // Need space for: labels (20px) + name input (28px) + hours input (28px) + buttons (28px) + padding (12px) = ~116px
+                                const minEditHeight = 130 // Minimum height in pixels for edit mode
+                                const editHeight = Math.max(heightPixels, minEditHeight)
+                                
+                                return (
                                 <div
                                   key={item.id}
-                          draggable={true}
+                          draggable={!isEditing}
+                          onClick={handleClick}
+                          onDoubleClick={handleDoubleClick}
+                          title={!isEditing ? "Double-click to edit" : ""}
                           onDragStart={(e) => {
+                            if (isEditing) {
+                              e.preventDefault()
+                              return
+                            }
+                            // Prevent drag if this might be a double-click attempt
+                            if (lastClickInfo && lastClickInfo.id === item.id) {
+                              const timeSinceClick = Date.now() - lastClickInfo.time
+                              if (timeSinceClick < 400) {
+                                // This might be a double-click, prevent drag
+                                e.preventDefault()
+                                setLastClickInfo(null)
+                                return
+                              }
+                            }
                             e.stopPropagation()
                             e.dataTransfer.effectAllowed = 'move'
                             // Mark this as a scheduled task being dragged
@@ -3548,6 +4039,8 @@ export default function TaskManager() {
                               e.dataTransfer.setData('text/plain', `gantt-subtask:${item.projectId}:${item.taskId}:${item.subtaskId}`)
                               setDraggedItemData({ type: 'subtask', projectId: item.projectId, taskId: item.taskId, subtaskId: item.subtaskId })
                             }
+                            // Clear click info when drag starts
+                            setLastClickInfo(null)
                           }}
                           onDragEnd={(e) => {
                             e.stopPropagation()
@@ -3556,19 +4049,117 @@ export default function TaskManager() {
                             setDragOverHour(null)
                             setDraggedItemData(null)
                           }}
-                                  className="absolute rounded-md border-l-2 shadow-sm z-20 flex flex-col p-1.5 overflow-hidden cursor-move hover:shadow-md transition-shadow"
+                                  className={`group absolute rounded-md border-l-2 shadow-sm z-20 flex flex-col p-1.5 overflow-visible ${isEditing ? 'cursor-default ring-2 ring-blue-400' : 'cursor-move hover:shadow-md'} transition-all duration-200`}
                           style={{
                                     top: '0px',
                                     left: `${leftPercent}%`,
                                     width: `${widthPercent}%`,
-                                    height: `${heightPixels}px`,
-                                    minHeight: `${heightPixels}px`,
+                                    height: isEditing ? `${editHeight}px` : `${heightPixels}px`,
+                                    minHeight: isEditing ? `${editHeight}px` : `${heightPixels}px`,
                                     backgroundColor: item.taskColor ? hexToRgba(item.taskColor, 0.15) : hexToRgba(item.projectColor, 0.15),
                                     borderLeftColor: item.projectColor,
                                     marginLeft: leftPercent > 0 ? '2px' : '4px',
                                     marginRight: '4px',
+                                    zIndex: isEditing ? 50 : 20, // Higher z-index when editing to ensure it's on top
                                   }}
                                 >
+                                  {/* Delete button - appears on hover (hidden when editing) */}
+                                  {!isEditing && (
+                                    <button
+                                      onClick={handleDelete}
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                      className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-red-500 hover:bg-red-600 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-30 shadow-sm pointer-events-auto"
+                                      title="Remove from schedule"
+                                    >
+                                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                  
+                                  {isEditing ? (
+                                    // Editing mode
+                                    <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                                      <div className="flex items-center gap-1 flex-shrink-0">
+                                        <span
+                                          className="text-[8px] px-1 py-0.5 rounded font-medium text-white truncate"
+                                          style={{ backgroundColor: item.projectColor }}
+                                        >
+                                          {item.projectName}
+                                        </span>
+                                        {item.taskName && (
+                                          <span
+                                            className="text-[8px] px-1 py-0.5 rounded font-medium text-white truncate"
+                                            style={{ backgroundColor: item.taskColor || item.projectColor }}
+                                          >
+                                            {item.taskName}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <input
+                                        type="text"
+                                        value={editingBlockName}
+                                        onChange={(e) => setEditingBlockName(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            handleSaveEdit()
+                                          } else if (e.key === 'Escape') {
+                                            handleCancelEdit()
+                                          }
+                                        }}
+                                        className="text-[10px] font-semibold text-slate-800 bg-white/95 border border-slate-300 rounded px-1.5 py-1 w-full focus:outline-none focus:ring-1 focus:ring-blue-500 flex-shrink-0"
+                                        placeholder="Task name"
+                                        autoFocus
+                                      />
+                                      <div className="flex items-center gap-1 flex-shrink-0">
+                                        <input
+                                          type="number"
+                                          min="0.5"
+                                          step="0.5"
+                                          value={editingBlockHours}
+                                          onChange={(e) => {
+                                            // Allow any input during editing - store as string
+                                            setEditingBlockHours(e.target.value)
+                                          }}
+                                          onBlur={(e) => {
+                                            // Ensure we have a valid value when input loses focus
+                                            const value = parseFloat(e.target.value)
+                                            if (isNaN(value) || value <= 0) {
+                                              setEditingBlockHours('0.5')
+                                            } else {
+                                              setEditingBlockHours(String(value))
+                                            }
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              handleSaveEdit()
+                                            } else if (e.key === 'Escape') {
+                                              handleCancelEdit()
+                                            }
+                                          }}
+                                          className="text-[9px] text-slate-800 bg-white/95 border border-slate-300 rounded px-1.5 py-1 w-16 focus:outline-none focus:ring-1 focus:ring-blue-500 flex-shrink-0"
+                                          placeholder="Hours"
+                                        />
+                                        <span className="text-[9px] text-slate-600 flex-shrink-0">hrs</span>
+                                      </div>
+                                      <div className="flex items-center gap-1 flex-shrink-0 mt-auto">
+                                        <button
+                                          onClick={handleSaveEdit}
+                                          className="text-[9px] px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded flex-1 transition-colors font-medium"
+                                        >
+                                          Save
+                                        </button>
+                                        <button
+                                          onClick={handleCancelEdit}
+                                          className="text-[9px] px-2 py-1 bg-slate-300 hover:bg-slate-400 text-slate-800 rounded flex-1 transition-colors font-medium"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    // Display mode
+                                    <>
                                   <div className="flex items-center gap-1 mb-0.5">
                                     <span
                                       className="text-[8px] px-1 py-0.5 rounded font-medium text-white truncate"
@@ -3592,9 +4183,12 @@ export default function TaskManager() {
                                     <p className="text-[8px] text-slate-600 mt-0.5">
                                       {item.durationHours === 0.5 ? '30 min' : item.durationHours === 1 ? '1 hr' : `${item.durationHours} hrs`}
                                     </p>
+                                      )}
+                                    </>
                                 )}
                           </div>
-                              ))
+                                )
+                              })
                             })()}
                             
                             {/* Current time indicator for today */}
