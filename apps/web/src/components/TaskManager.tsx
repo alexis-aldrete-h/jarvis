@@ -383,7 +383,7 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
     e.preventDefault()
     setIsEditing(true)
     setEditingName(subtask.name)
-    setEditingHours(storyPointsToHours(subtask.storyPoints))
+    setEditingHours(String(storyPointsToHours(subtask.storyPoints)))
     setLastClickInfo(null)
   }
 
@@ -514,24 +514,9 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
               />
               <div className="flex items-center gap-2 flex-wrap">
                 <label className="text-[10px] text-slate-600 whitespace-nowrap">Hours:</label>
-                <input
-                  type="number"
-                  min="0.5"
-                  step="0.5"
+                <select
                   value={editingHours}
-                  onChange={(e) => {
-                    // Allow any input during editing - store as string
-                    setEditingHours(e.target.value)
-                  }}
-                  onBlur={(e) => {
-                    // Ensure we have a valid value when input loses focus
-                    const value = parseFloat(e.target.value)
-                    if (isNaN(value) || value <= 0) {
-                      setEditingHours('0.5')
-                    } else {
-                      setEditingHours(String(value))
-                    }
-                  }}
+                  onChange={(e) => setEditingHours(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       handleSaveEdit()
@@ -539,8 +524,15 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
                       handleCancelEdit()
                     }
                   }}
-                  className="w-16 px-2 py-1.5 text-[10px] border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 flex-shrink-0"
-                />
+                  className="w-20 px-2 py-1.5 text-[10px] border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 flex-shrink-0"
+                >
+                  <option value="0.5">30 min</option>
+                  {Array.from({ length: 30 }, (_, i) => i + 1).map((hour) => (
+                    <option key={hour} value={hour}>
+                      {hour === 1 ? '1 hr' : `${hour} hrs`}
+                    </option>
+                  ))}
+                </select>
                 <div className="flex gap-1.5 ml-auto flex-shrink-0">
                   <button
                     onClick={handleSaveEdit}
@@ -656,7 +648,7 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
       e.preventDefault()
       setIsEditing(true)
       setEditingName(task.name)
-      setEditingHours(storyPointsToHours((task as any).totalPoints))
+      setEditingHours(String(storyPointsToHours((task as any).totalPoints)))
       setLastClickInfo(null)
     } else {
       // Store this click for potential double-click
@@ -807,24 +799,9 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
               />
               <div className="flex items-center gap-2 flex-wrap">
                 <label className="text-[10px] text-slate-600 whitespace-nowrap">Hours:</label>
-                <input
-                  type="number"
-                  min="0.5"
-                  step="0.5"
+                <select
                   value={editingHours}
-                  onChange={(e) => {
-                    // Allow any input during editing - store as string
-                    setEditingHours(e.target.value)
-                  }}
-                  onBlur={(e) => {
-                    // Ensure we have a valid value when input loses focus
-                    const value = parseFloat(e.target.value)
-                    if (isNaN(value) || value <= 0) {
-                      setEditingHours('0.5')
-                    } else {
-                      setEditingHours(String(value))
-                    }
-                  }}
+                  onChange={(e) => setEditingHours(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       handleSaveEdit()
@@ -832,8 +809,15 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
                       handleCancelEdit()
                     }
                   }}
-                  className="w-16 px-2 py-1.5 text-[10px] border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 flex-shrink-0"
-                />
+                  className="w-20 px-2 py-1.5 text-[10px] border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 flex-shrink-0"
+                >
+                  <option value="0.5">30 min</option>
+                  {Array.from({ length: 30 }, (_, i) => i + 1).map((hour) => (
+                    <option key={hour} value={hour}>
+                      {hour === 1 ? '1 hr' : `${hour} hrs`}
+                    </option>
+                  ))}
+                </select>
                 <div className="flex gap-1.5 ml-auto flex-shrink-0">
                   <button
                     onClick={handleSaveEdit}
@@ -1108,12 +1092,13 @@ export default function TaskManager() {
   const [resizeStartX, setResizeStartX] = useState<number>(0)
   const [dragOverDay, setDragOverDay] = useState<Date | null>(null)
   const [dragOverHour, setDragOverHour] = useState<number | null>(null)
+  const [dragOverHalf, setDragOverHalf] = useState<'upper' | 'lower' | null>(null) // Track which half of hour is hovered
   const [draggedItemData, setDraggedItemData] = useState<{ type: 'task' | 'subtask', projectId: string, taskId: string, subtaskId?: string } | null>(null)
   const draggedItemDataRef = useRef<{ type: 'task' | 'subtask', projectId: string, taskId: string, subtaskId?: string } | null>(null)
   // State for creating routine tasks in Weekly Plan
   const [isCreatingRoutineTask, setIsCreatingRoutineTask] = useState(false)
   const [newRoutineTaskName, setNewRoutineTaskName] = useState('')
-  const [newRoutineTaskHours, setNewRoutineTaskHours] = useState<number>(1)
+  const [newRoutineTaskHours, setNewRoutineTaskHours] = useState<number>(0.5)
   // State for editing scheduled blocks in weekly plan
   const [editingScheduledBlockId, setEditingScheduledBlockId] = useState<string | null>(null)
   const [editingBlockName, setEditingBlockName] = useState('')
@@ -1122,6 +1107,20 @@ export default function TaskManager() {
   const [lastClickInfo, setLastClickInfo] = useState<{ id: string; time: number } | null>(null)
   // Force re-render after updates
   const [updateTrigger, setUpdateTrigger] = useState(0)
+  // State for delete confirmation modal for sprint/routine tasks
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
+    item: {
+      id: string
+      name: string
+      type: 'task' | 'subtask'
+      projectId: string
+      taskId?: string
+      subtaskId?: string
+      isRoutine: boolean
+      projectName: string
+      taskName?: string
+    }
+  } | null>(null)
   // Store routine task instances that have been scheduled (so they can be dragged multiple times)
   const ROUTINE_INSTANCES_KEY = 'jarvis_routine_instances'
   
@@ -1825,6 +1824,32 @@ export default function TaskManager() {
     return groupedGanttSubtasks.find(c => c.status === 'routine')?.ganttSubtasks || []
   }, [groupedGanttSubtasks, updateTrigger, projects])
 
+  // Handle deleting sprint/routine tasks from all places
+  const handleConfirmDelete = () => {
+    if (!deleteConfirmModal) return
+    
+    const { item } = deleteConfirmModal
+    
+    // For routine tasks, remove all routine instances from calendar first
+    if (item.isRoutine) {
+      if (item.type === 'task' && item.taskId) {
+        setRoutineInstances(prev => prev.filter(instance => !(instance.originalId === item.taskId && instance.type === 'task')))
+      } else if (item.type === 'subtask' && item.subtaskId) {
+        setRoutineInstances(prev => prev.filter(instance => !(instance.originalId === item.subtaskId && instance.type === 'subtask')))
+      }
+    }
+    
+    // Delete the task/subtask from all places (board, gantt, projects table, calendar)
+    // This will automatically remove it from calendar schedule, board section, gantt chart, and projects table
+    if (item.type === 'task' && item.taskId && item.projectId && deleteGanttTask) {
+      deleteGanttTask(item.projectId, item.taskId)
+    } else if (item.type === 'subtask' && item.taskId && item.subtaskId && item.projectId && deleteGanttSubtask) {
+      deleteGanttSubtask(item.projectId, item.taskId, item.subtaskId)
+    }
+    
+    setDeleteConfirmModal(null)
+  }
+
   // Handle creating a routine task
   const handleCreateRoutineTask = () => {
     if (!newRoutineTaskName.trim()) return
@@ -1859,7 +1884,7 @@ export default function TaskManager() {
         // Reset form
         setIsCreatingRoutineTask(false)
         setNewRoutineTaskName('')
-        setNewRoutineTaskHours(1)
+        setNewRoutineTaskHours(0.5)
       }, 100)
     } else {
       // Project already exists, create task immediately
@@ -3157,8 +3182,39 @@ export default function TaskManager() {
                           key={`sprint-task-${ganttTask.id}`}
                           task={ganttTask}
                           parentProject={parentProject}
-                          onUpdate={(updates) => updateGanttTask?.(parentProject.id, ganttTask.id, updates)}
-                          onDelete={() => deleteGanttTask?.(parentProject.id, ganttTask.id)}
+                          onUpdate={(updates) => {
+                            // If hours (totalPoints) changed and task is scheduled, recalculate endDate
+                            const updatedTotalPoints = (updates as any).totalPoints
+                            if (updatedTotalPoints !== undefined && ganttTask.startDate && ganttTask.startDate.includes('T')) {
+                              const startDate = new Date(ganttTask.startDate)
+                              const newHours = storyPointsToHours(updatedTotalPoints)
+                              const newEndDate = new Date(startDate.getTime() + newHours * 60 * 60 * 1000)
+                              updateGanttTask?.(parentProject.id, ganttTask.id, {
+                                ...updates,
+                                endDate: newEndDate.toISOString(),
+                              } as any)
+                            } else {
+                              updateGanttTask?.(parentProject.id, ganttTask.id, updates)
+                            }
+                            
+                            // Force a re-render to ensure UI updates
+                            setTimeout(() => {
+                              setUpdateTrigger(prev => prev + 1)
+                            }, 100)
+                          }}
+                          onDelete={() => {
+                            setDeleteConfirmModal({
+                              item: {
+                                id: ganttTask.id,
+                                name: ganttTask.name,
+                                type: 'task',
+                                projectId: parentProject.id,
+                                taskId: ganttTask.id,
+                                isRoutine: false,
+                                projectName: parentProject.name,
+                              }
+                            })
+                          }}
                           columnStatus="sprint"
                           onDragStartCallback={(data) => {
                             setDraggedItemData(data)
@@ -3172,8 +3228,41 @@ export default function TaskManager() {
                           subtask={ganttSubtask}
                           parentTask={parentTask}
                           parentProject={parentProject}
-                          onUpdate={(updates) => updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, updates)}
-                          onDelete={() => deleteGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id)}
+                          onUpdate={(updates) => {
+                            // If hours (storyPoints) changed and subtask is scheduled, recalculate endDate
+                            const updatedStoryPoints = updates.storyPoints
+                            if (updatedStoryPoints !== undefined && ganttSubtask.startDate && ganttSubtask.startDate.includes('T')) {
+                              const startDate = new Date(ganttSubtask.startDate)
+                              const newHours = storyPointsToHours(updatedStoryPoints)
+                              const newEndDate = new Date(startDate.getTime() + newHours * 60 * 60 * 1000)
+                              updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, {
+                                ...updates,
+                                endDate: newEndDate.toISOString(),
+                              } as any)
+                            } else {
+                              updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, updates)
+                            }
+                            
+                            // Force a re-render to ensure UI updates
+                            setTimeout(() => {
+                              setUpdateTrigger(prev => prev + 1)
+                            }, 100)
+                          }}
+                          onDelete={() => {
+                            setDeleteConfirmModal({
+                              item: {
+                                id: ganttSubtask.id,
+                                name: ganttSubtask.name,
+                                type: 'subtask',
+                                projectId: parentProject.id,
+                                taskId: parentTask.id,
+                                subtaskId: ganttSubtask.id,
+                                isRoutine: false,
+                                projectName: parentProject.name,
+                                taskName: parentTask.name,
+                              }
+                            })
+                          }}
                           columnStatus="sprint"
                           onDragStartCallback={(data) => {
                             setDraggedItemData(data)
@@ -3276,9 +3365,10 @@ export default function TaskManager() {
                           onChange={(e) => setNewRoutineTaskHours(parseFloat(e.target.value))}
                           className="flex-1 px-2 py-1.5 text-xs border border-purple-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-400"
                         >
+                          <option value={0.5}>30 min</option>
                           {Array.from({ length: 30 }, (_, i) => i + 1).map((hour) => (
                             <option key={hour} value={hour}>
-                              {hour}
+                              {hour === 1 ? '1 hr' : `${hour} hrs`}
                             </option>
                           ))}
                         </select>
@@ -3314,8 +3404,52 @@ export default function TaskManager() {
                           key={`routine-task-${ganttTask.id}`}
                           task={ganttTask}
                           parentProject={parentProject}
-                          onUpdate={(updates) => updateGanttTask?.(parentProject.id, ganttTask.id, updates)}
-                          onDelete={() => deleteGanttTask?.(parentProject.id, ganttTask.id)}
+                          onUpdate={(updates) => {
+                            // Update the task itself
+                            updateGanttTask?.(parentProject.id, ganttTask.id, updates)
+                            
+                            // Also update all routine instances with the same originalId
+                            const updatedName = updates.name || ganttTask.name
+                            // totalPoints is already in hours (1:1 mapping), so use it directly
+                            const updatedHours = (updates as any).totalPoints !== undefined 
+                              ? storyPointsToHours((updates as any).totalPoints) 
+                              : undefined
+                            
+                            setRoutineInstances(prev => prev.map(inst => {
+                              // Match by originalId and type to find all instances of the same routine task
+                              if (inst.originalId === ganttTask.id && inst.type === 'task') {
+                                const finalHours = updatedHours !== undefined ? updatedHours : storyPointsToHours(inst.totalPoints)
+                                return {
+                                  ...inst,
+                                  name: updatedName,
+                                  totalPoints: updatedHours !== undefined ? updatedHours : inst.totalPoints,
+                                  // Recalculate dueDate if hours changed
+                                  dueDate: inst.startDate
+                                    ? new Date(new Date(inst.startDate).getTime() + finalHours * 60 * 60 * 1000).toISOString()
+                                    : inst.dueDate,
+                                }
+                              }
+                              return inst
+                            }))
+                            
+                            // Force a re-render to ensure UI updates
+                            setTimeout(() => {
+                              setUpdateTrigger(prev => prev + 1)
+                            }, 100)
+                          }}
+                          onDelete={() => {
+                            setDeleteConfirmModal({
+                              item: {
+                                id: ganttTask.id,
+                                name: ganttTask.name,
+                                type: 'task',
+                                projectId: parentProject.id,
+                                taskId: ganttTask.id,
+                                isRoutine: true,
+                                projectName: parentProject.name,
+                              }
+                            })
+                          }}
                           columnStatus="routine"
                           onDragStartCallback={(data) => {
                             setDraggedItemData(data)
@@ -3329,8 +3463,54 @@ export default function TaskManager() {
                           subtask={ganttSubtask}
                           parentTask={parentTask}
                           parentProject={parentProject}
-                          onUpdate={(updates) => updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, updates)}
-                          onDelete={() => deleteGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id)}
+                          onUpdate={(updates) => {
+                            // Update the subtask itself
+                            updateGanttSubtask?.(parentProject.id, parentTask.id, ganttSubtask.id, updates)
+                            
+                            // Also update all routine instances with the same originalId
+                            const updatedName = updates.name || ganttSubtask.name
+                            // storyPoints is already in hours (1:1 mapping), so use it directly
+                            const updatedHours = updates.storyPoints !== undefined 
+                              ? storyPointsToHours(updates.storyPoints) 
+                              : undefined
+                            
+                            setRoutineInstances(prev => prev.map(inst => {
+                              // Match by originalId and type to find all instances of the same routine subtask
+                              if (inst.originalId === ganttSubtask.id && inst.type === 'subtask') {
+                                const finalHours = updatedHours !== undefined ? updatedHours : storyPointsToHours(inst.storyPoints)
+                                return {
+                                  ...inst,
+                                  name: updatedName,
+                                  storyPoints: updatedHours !== undefined ? updatedHours : inst.storyPoints,
+                                  // Recalculate dueDate if hours changed
+                                  dueDate: inst.startDate
+                                    ? new Date(new Date(inst.startDate).getTime() + finalHours * 60 * 60 * 1000).toISOString()
+                                    : inst.dueDate,
+                                }
+                              }
+                              return inst
+                            }))
+                            
+                            // Force a re-render to ensure UI updates
+                            setTimeout(() => {
+                              setUpdateTrigger(prev => prev + 1)
+                            }, 100)
+                          }}
+                          onDelete={() => {
+                            setDeleteConfirmModal({
+                              item: {
+                                id: ganttSubtask.id,
+                                name: ganttSubtask.name,
+                                type: 'subtask',
+                                projectId: parentProject.id,
+                                taskId: parentTask.id,
+                                subtaskId: ganttSubtask.id,
+                                isRoutine: true,
+                                projectName: parentProject.name,
+                                taskName: parentTask.name,
+                              }
+                            })
+                          }}
                           columnStatus="routine"
                           onDragStartCallback={(data) => {
                             setDraggedItemData(data)
@@ -3437,10 +3617,38 @@ export default function TaskManager() {
                             const currentData = draggedItemDataRef.current
                             if (currentData) {
                               setDraggedItemData(currentData)
+                              
+                              // Calculate which half of the hour is being hovered (for tasks < 1 hour)
+                              const positionInHour = (y % hourHeight) / hourHeight // 0 to 1
+                              const isUpperHalf = positionInHour <= 0.5
+                              
+                              // Get duration of dragged item to determine if it's < 1 hour
+                              let durationHours = 1 // Default
+                              if (currentData.type === 'task') {
+                                const task = projects.find(p => p.id === currentData.projectId)?.children?.find(t => t.id === currentData.taskId)
+                                if (task) {
+                                  durationHours = storyPointsToHours((task as any).totalPoints)
+                                }
+                              } else if (currentData.type === 'subtask' && currentData.subtaskId) {
+                                const subtask = projects.find(p => p.id === currentData.projectId)?.children?.find(t => t.id === currentData.taskId)?.children?.find(st => st.id === currentData.subtaskId)
+                                if (subtask) {
+                                  durationHours = storyPointsToHours(subtask.storyPoints)
+                                }
+                              }
+                              
+                              // Only show half highlight for tasks < 1 hour
+                              if (durationHours < 1) {
+                                setDragOverHalf(isUpperHalf ? 'upper' : 'lower')
+                              } else {
+                                setDragOverHalf(null)
+                              }
+                            } else {
+                              setDragOverHalf(null)
                             }
                           } else {
                             setDragOverDay(null)
                             setDragOverHour(null)
+                            setDragOverHalf(null)
                           }
                         }
                       }}
@@ -3450,14 +3658,34 @@ export default function TaskManager() {
                         if (!e.currentTarget.contains(relatedTarget)) {
                           setDragOverDay(null)
                           setDragOverHour(null)
+                          setDragOverHalf(null)
                         }
                       }}
                       onDrop={(e) => {
                         // Clear drag over state
                         setDragOverDay(null)
                         setDragOverHour(null)
+                        setDragOverHalf(null)
                         setDraggedItemData(null)
                         draggedItemDataRef.current = null
+                        
+                        // Helper function to calculate hour and minutes based on click position and task duration
+                        const calculateTimeFromPosition = (y: number, rect: DOMRect, durationHours: number): { hour: number; minutes: number } => {
+                          const hourHeight = rect.height / 20
+                          const hourIndex = Math.floor(y / hourHeight)
+                          const displayHour = 5 + Math.max(0, Math.min(19, hourIndex)) // Clamp between 5 AM (index 0) and 12 AM (index 19)
+                          const hour = displayHour === 24 ? 0 : displayHour
+                          
+                          // For tasks less than an hour, allow placement in upper or lower half
+                          let minutes = 0
+                          if (durationHours < 1) {
+                            const positionInHour = (y % hourHeight) / hourHeight // 0 to 1
+                            // If clicked in lower half of hour (position > 0.5), place at :30
+                            minutes = positionInHour > 0.5 ? 30 : 0
+                          }
+                          
+                          return { hour, minutes }
+                        }
                         
                         // Allow rescheduling of scheduled tasks by dropping them on a new time slot
                         const data = e.dataTransfer.getData('text/plain')
@@ -3468,8 +3696,8 @@ export default function TaskManager() {
                         // Check if this is a routine instance being moved
                         if (isScheduledTask && data.startsWith('routine-instance:')) {
                           // This is a routine instance being moved - update its position
-                          e.preventDefault()
-                          e.stopPropagation()
+                        e.preventDefault()
+                        e.stopPropagation()
                           
                           const [, instanceId] = data.split(':')
                           const instance = routineInstances.find(inst => inst.id === instanceId)
@@ -3478,13 +3706,14 @@ export default function TaskManager() {
                             return
                           }
                           
+                          // Calculate duration from the instance's totalPoints or storyPoints
+                          const durationHours = instance.type === 'task' 
+                            ? storyPointsToHours(instance.totalPoints)
+                            : storyPointsToHours(instance.storyPoints)
+                        
                           const rect = e.currentTarget.getBoundingClientRect()
                           const y = e.clientY - rect.top
-                          const hourHeight = rect.height / 20
-                          const hourIndex = Math.floor(y / hourHeight)
-                          const displayHour = 5 + Math.max(0, Math.min(19, hourIndex)) // Clamp between 5 AM (index 0) and 12 AM (index 19)
-                          // Convert display hour (5-24) to actual hour (5-23, 0)
-                          const hour = displayHour === 24 ? 0 : displayHour
+                          const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
                           
                           // Validate hour is within allowed range (5 AM to 12 AM)
                           if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) {
@@ -3492,12 +3721,7 @@ export default function TaskManager() {
                           }
                           
                           const newStart = new Date(day)
-                          newStart.setHours(hour, 0, 0, 0)
-                          
-                          // Calculate duration from the instance's totalPoints or storyPoints
-                          const durationHours = instance.type === 'task' 
-                            ? storyPointsToHours(instance.totalPoints)
-                            : storyPointsToHours(instance.storyPoints)
+                          newStart.setHours(hour, minutes, 0, 0)
                           const newEnd = new Date(newStart.getTime() + durationHours * 60 * 60 * 1000)
                           
                           // Check for overlaps (excluding the current instance being moved)
@@ -3543,25 +3767,21 @@ export default function TaskManager() {
                         
                           const rect = e.currentTarget.getBoundingClientRect()
                           const y = e.clientY - rect.top
-                          const hourHeight = rect.height / 20
-                          const hourIndex = Math.floor(y / hourHeight)
-                          const displayHour = 5 + Math.max(0, Math.min(19, hourIndex)) // Clamp between 5 AM (index 0) and 12 AM (index 19)
-                          // Convert display hour (5-24) to actual hour (5-23, 0)
-                          const hour = displayHour === 24 ? 0 : displayHour
-                          
-                          // Validate hour is within allowed range (5 AM to 12 AM)
-                          if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) {
-                            return // Invalid hour, don't reschedule
-                          }
                           
                           if (data.startsWith('gantt-task:')) {
                             const [, projectId, taskId] = data.split(':')
                             const task = projects.find(p => p.id === projectId)?.children?.find(t => t.id === taskId)
                             if (task && updateGanttTask) {
-                            const newStart = new Date(day)
-                              newStart.setHours(hour, 0, 0, 0)
-                              
                               const durationHours = storyPointsToHours((task as any).totalPoints)
+                              const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                              
+                              // Validate hour is within allowed range (5 AM to 12 AM)
+                              if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) {
+                                return // Invalid hour, don't reschedule
+                              }
+                              
+                              const newStart = new Date(day)
+                              newStart.setHours(hour, minutes, 0, 0)
                               const newEnd = new Date(newStart.getTime() + durationHours * 60 * 60 * 1000)
                               
                               // Check for overlaps (excluding the current task being moved)
@@ -3593,10 +3813,16 @@ export default function TaskManager() {
                             const [, projectId, taskId, subtaskId] = data.split(':')
                             const subtask = projects.find(p => p.id === projectId)?.children?.find(t => t.id === taskId)?.children?.find(st => st.id === subtaskId)
                             if (subtask && updateGanttSubtask) {
-                              const newStart = new Date(day)
-                              newStart.setHours(hour, 0, 0, 0)
-                              
                               const durationHours = storyPointsToHours(subtask.storyPoints)
+                              const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                              
+                              // Validate hour is within allowed range (5 AM to 12 AM)
+                              if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) {
+                                return // Invalid hour, don't reschedule
+                              }
+                              
+                              const newStart = new Date(day)
+                              newStart.setHours(hour, minutes, 0, 0)
                               const newEnd = new Date(newStart.getTime() + durationHours * 60 * 60 * 1000)
                               
                               // Check for overlaps (excluding the current subtask being moved)
@@ -3631,16 +3857,6 @@ export default function TaskManager() {
                         
                         e.preventDefault()
                         e.stopPropagation()
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        const y = e.clientY - rect.top
-                        const hourHeight = rect.height / 20
-                        const hourIndex = Math.floor(y / hourHeight)
-                        const displayHour = 5 + Math.max(0, Math.min(19, hourIndex)) // Clamp between 5 AM (index 0) and 12 AM (index 19)
-                        // Convert display hour (5-24) to actual hour (5-23, 0)
-                        const hour = displayHour === 24 ? 0 : displayHour
-                        
-                        // Ensure hour is within 5 AM to 12 AM range
-                        if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) return
                         
                         // Helper function to check if two time ranges overlap
                         const doTimeRangesOverlap = (start1: Date, end1: Date, start2: Date, end2: Date): boolean => {
@@ -3664,11 +3880,18 @@ export default function TaskManager() {
                           const task = projects.find(p => p.id === projectId)?.children?.find(t => t.id === taskId)
                           const project = projects.find(p => p.id === projectId)
                           if (task && project) {
-                            const newStart = new Date(day)
-                            newStart.setHours(hour, 0, 0, 0)
-                            
                             // Calculate duration from totalPoints (for tasks without subtasks, matches projects table)
                             const durationHours = storyPointsToHours((task as any).totalPoints)
+                            
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            const y = e.clientY - rect.top
+                            const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                            
+                            // Ensure hour is within 5 AM to 12 AM range
+                            if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) return
+                            
+                            const newStart = new Date(day)
+                            newStart.setHours(hour, minutes, 0, 0)
                             const newEnd = new Date(newStart.getTime() + durationHours * 60 * 60 * 1000)
                             
                             // Check for overlaps with existing scheduled items
@@ -3724,11 +3947,18 @@ export default function TaskManager() {
                           const task = projects.find(p => p.id === projectId)?.children?.find(t => t.id === taskId)
                           const project = projects.find(p => p.id === projectId)
                           if (subtask && task && project) {
-                            const newStart = new Date(day)
-                            newStart.setHours(hour, 0, 0, 0)
-                            
                             // Calculate duration from story points
                             const durationHours = storyPointsToHours(subtask.storyPoints)
+                            
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            const y = e.clientY - rect.top
+                            const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                            
+                            // Ensure hour is within 5 AM to 12 AM range
+                            if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) return
+                            
+                            const newStart = new Date(day)
+                            newStart.setHours(hour, minutes, 0, 0)
                             const newEnd = new Date(newStart.getTime() + durationHours * 60 * 60 * 1000)
                             
                             // Check for overlaps with existing scheduled items
@@ -3796,6 +4026,13 @@ export default function TaskManager() {
                       {Array.from({ length: 20 }, (_, i) => {
                         const displayHour = 5 + i // Display hour: 5-24 (where 24 = 12 AM)
                         // Find tasks that start at this hour on this day
+                        // Calculate the actual hour range for this slot
+                        const actualHour = displayHour === 24 ? 0 : displayHour
+                        const slotStart = new Date(day)
+                        slotStart.setHours(actualHour, 0, 0, 0)
+                        const slotEnd = new Date(day)
+                        slotEnd.setHours(actualHour, 59, 59, 999)
+                        
                         const tasksAtThisHour = scheduledItems.filter(item => {
                           const itemDay = item.startDate.getDate()
                           const itemMonth = item.startDate.getMonth()
@@ -3803,10 +4040,22 @@ export default function TaskManager() {
                           const dayDate = day.getDate()
                           const dayMonth = day.getMonth()
                           const dayYear = day.getFullYear()
-                          return itemDay === dayDate && 
-                                 itemMonth === dayMonth && 
-                                 itemYear === dayYear &&
-                                 item.startHour === displayHour
+                          
+                          // Check if item is on the same day
+                          const isSameDay = itemDay === dayDate && 
+                                           itemMonth === dayMonth && 
+                                           itemYear === dayYear
+                          
+                          if (!isSameDay) return false
+                          
+                          // Check if item overlaps with this hour slot
+                          // Item overlaps if it starts before the slot ends and ends after the slot starts
+                          const itemStart = item.startDate.getTime()
+                          const itemEnd = item.endDate.getTime()
+                          const slotStartTime = slotStart.getTime()
+                          const slotEndTime = slotEnd.getTime()
+                          
+                          return itemStart < slotEndTime && itemEnd > slotStartTime
                         })
                   
                   // Check if this hour slot is being dragged over
@@ -3818,10 +4067,18 @@ export default function TaskManager() {
                     <div
                             key={displayHour}
                             className={`h-16 border-b border-slate-100 hover:bg-slate-50/50 transition-colors relative overflow-visible ${
-                              isDragOverThisSlot ? 'bg-blue-100/50 ring-2 ring-blue-400 ring-inset' : ''
+                              isDragOverThisSlot && !dragOverHalf ? 'bg-blue-100/50 ring-2 ring-blue-400 ring-inset' : ''
                             }`}
-                          >
-                            {/* Preview block showing where the task would be dropped */}
+                    >
+                      {/* Highlight for upper or lower half when dragging 30-min task */}
+                      {isDragOverThisSlot && dragOverHalf && (
+                        <div
+                          className={`absolute left-0 right-0 border-2 border-dashed border-blue-500 bg-blue-200/40 z-10 pointer-events-none ${
+                            dragOverHalf === 'upper' ? 'top-0 h-1/2' : 'bottom-0 h-1/2'
+                          }`}
+                        />
+                      )}
+                      {/* Preview block showing where the task would be dropped */}
                             {isDragOverThisSlot && draggedItemData && (() => {
                               // Get the dragged item data to calculate duration
                               let durationHours = 1 // Default
@@ -3839,12 +4096,18 @@ export default function TaskManager() {
                               }
                               
                               const previewHeight = Math.round(durationHours * 64) // Each hour is 64px
+                              
+                              // For tasks < 1 hour, position based on which half is hovered
+                              let previewTop = 0
+                              if (durationHours < 1 && dragOverHalf) {
+                                previewTop = dragOverHalf === 'upper' ? 0 : 32 // 32px = half of 64px hour height
+                              }
 
                           return (
                                 <div
                                   className="absolute left-0 right-0 rounded-md border-2 border-dashed border-blue-400 bg-blue-100/30 z-10 pointer-events-none"
                                   style={{
-                                    top: '0px',
+                                    top: `${previewTop}px`,
                                     height: `${previewHeight}px`,
                                     minHeight: '32px',
                                   }}
@@ -3898,6 +4161,10 @@ export default function TaskManager() {
                                 // Check if this is a routine instance
                                 const isRoutineInstance = item.id.startsWith('routine-instance-')
                                 const isEditing = editingScheduledBlockId === item.id
+                                
+                                // Calculate top position based on minutes (each hour is 64px, so each minute is 64/60 = 1.067px)
+                                const startMinutes = item.startDate.getMinutes()
+                                const topOffset = Math.round((startMinutes / 60) * 64) // Position within the hour slot
                                 
                                 // Handle delete/unschedule
                                 const handleDelete = (e: React.MouseEvent) => {
@@ -3982,17 +4249,17 @@ export default function TaskManager() {
                                       return prev.map(inst => {
                                         // Match by originalId and type to find all instances of the same routine task
                                         if (inst.originalId === originalId && inst.type === instanceType) {
-                                          const startDate = new Date(inst.startDate)
-                                          const newEndDate = new Date(startDate.getTime() + hoursValue * 60 * 60 * 1000)
-                                          return {
-                                            ...inst,
+                                        const startDate = new Date(inst.startDate)
+                                        const newEndDate = new Date(startDate.getTime() + hoursValue * 60 * 60 * 1000)
+                                        return {
+                                          ...inst,
                                             name: finalName,
                                             totalPoints: instanceType === 'task' ? hoursValue : inst.totalPoints,
                                             storyPoints: instanceType === 'subtask' ? hoursValue : inst.storyPoints,
-                                            dueDate: newEndDate.toISOString(), // Update endDate based on new duration
-                                          }
+                                          dueDate: newEndDate.toISOString(), // Update endDate based on new duration
                                         }
-                                        return inst
+                                      }
+                                      return inst
                                       })
                                     })
                                     
@@ -4098,9 +4365,9 @@ export default function TaskManager() {
                             setDragOverHour(null)
                             setDraggedItemData(null)
                           }}
-                                  className={`group absolute rounded-md border-l-2 shadow-sm z-20 flex flex-col p-1.5 overflow-visible ${isEditing ? 'cursor-default ring-2 ring-blue-400' : 'cursor-move hover:shadow-md'} transition-all duration-200`}
+                                  className={`group absolute rounded-md border-l-2 shadow-sm z-20 flex flex-col overflow-visible ${isEditing ? 'cursor-default ring-2 ring-blue-400 p-1.5' : heightPixels < 40 ? 'p-0.5 cursor-move hover:shadow-md' : 'p-1.5 cursor-move hover:shadow-md'} transition-all duration-200`}
                           style={{
-                                    top: '0px',
+                                    top: `${topOffset}px`,
                                     left: `${leftPercent}%`,
                                     width: `${widthPercent}%`,
                                     height: isEditing ? `${editHeight}px` : `${heightPixels}px`,
@@ -4208,7 +4475,61 @@ export default function TaskManager() {
                                   ) : (
                                     // Display mode
                                     <>
-                                  <div className="flex items-center gap-1 mb-0.5">
+                                  {/* Compact layout for short blocks (30 min or less) */}
+                                  {heightPixels < 40 ? (
+                                    <div className="flex flex-col gap-0.5 h-full justify-center min-h-0 overflow-hidden">
+                                      {/* Single line layout for very short blocks (30 min) - prioritize task name */}
+                                      {heightPixels < 35 ? (
+                                        <div className="flex flex-col gap-0.5 h-full justify-center min-h-0">
+                                          <p className="text-[10px] font-bold text-slate-900 truncate leading-tight">
+                                            {item.name}
+                                          </p>
+                                          <div className="flex items-center gap-1 flex-shrink-0">
+                                            <span
+                                              className="text-[6px] px-0.5 py-0 rounded font-medium text-white truncate"
+                                              style={{ backgroundColor: item.projectColor }}
+                                            >
+                                              {item.projectName}
+                                            </span>
+                                            {item.durationHours > 0 && (
+                                              <p className="text-[7px] text-slate-600 leading-tight whitespace-nowrap">
+                                                {item.durationHours === 0.5 ? '30 min' : item.durationHours === 1 ? '1 hr' : `${item.durationHours} hrs`}
+                                              </p>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <div className="flex flex-col gap-0.5 h-full justify-center min-h-0">
+                                          <div className="flex items-center gap-0.5 flex-shrink-0">
+                                            <span
+                                              className="text-[7px] px-0.5 py-0 rounded font-medium text-white truncate"
+                                              style={{ backgroundColor: item.projectColor }}
+                                            >
+                                              {item.projectName}
+                                            </span>
+                                            {item.taskName && (
+                                              <span
+                                                className="text-[7px] px-0.5 py-0 rounded font-medium text-white truncate"
+                                                style={{ backgroundColor: item.taskColor || item.projectColor }}
+                                              >
+                                                {item.taskName}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <p className="text-[9px] font-semibold text-slate-800 truncate leading-tight">
+                                            {item.name}
+                                          </p>
+                                          {item.durationHours > 0 && (
+                                            <p className="text-[7px] text-slate-600 leading-tight">
+                                              {item.durationHours === 0.5 ? '30 min' : item.durationHours === 1 ? '1 hr' : `${item.durationHours} hrs`}
+                                            </p>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <div className="flex items-center gap-1 mb-0.5 flex-shrink-0">
                                     <span
                                       className="text-[8px] px-1 py-0.5 rounded font-medium text-white truncate"
                                       style={{ backgroundColor: item.projectColor }}
@@ -4231,6 +4552,8 @@ export default function TaskManager() {
                                     <p className="text-[8px] text-slate-600 mt-0.5">
                                       {item.durationHours === 0.5 ? '30 min' : item.durationHours === 1 ? '1 hr' : `${item.durationHours} hrs`}
                                     </p>
+                                      )}
+                                    </>
                                       )}
                                     </>
                                 )}
@@ -4549,6 +4872,107 @@ export default function TaskManager() {
 
         </div>
       </main>
+
+      {/* Delete Confirmation Modal for Sprint/Routine Tasks */}
+      {deleteConfirmModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setDeleteConfirmModal(null)
+            }
+          }}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity" />
+          
+          {/* Modal Content */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative z-10 bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+          >
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-slate-200 bg-gradient-to-r from-red-50 to-orange-50">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Delete {deleteConfirmModal.item.type === 'task' ? 'Task' : 'Subtask'}
+                  </h3>
+                  <p className="text-sm text-slate-600 mt-0.5">
+                    This action cannot be undone
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            {/* Modal Body */}
+            <div className="px-6 py-5">
+              <p className="text-sm text-slate-700 mb-4">
+                Are you sure you want to permanently delete <span className="font-semibold text-slate-900">"{deleteConfirmModal.item.name}"</span>?
+              </p>
+              
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">This will remove the {deleteConfirmModal.item.type === 'task' ? 'task' : 'subtask'} from:</p>
+                <ul className="space-y-1.5 text-sm text-slate-700">
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    Calendar schedule
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    Board section
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    Gantt chart
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    Projects table
+                  </li>
+                  {deleteConfirmModal.item.isRoutine && (
+                    <li className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      All routine instances in calendar
+                    </li>
+                  )}
+                </ul>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setDeleteConfirmModal(null)}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hover:border-slate-400 smooth-transition shadow-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 smooth-transition shadow-sm"
+              >
+                Delete Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
