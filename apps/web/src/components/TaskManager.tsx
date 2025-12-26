@@ -475,27 +475,6 @@ const GanttSubtaskCard = React.memo(function GanttSubtaskCard({
       }}
     >
       <div className="flex items-start gap-1.5 pl-1">
-        <button
-          type="button"
-          draggable={false}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            onUpdate({ status: isCompleted ? 'backlog' : 'completed' })
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-          className={`mt-0.5 w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 smooth-transition ${
-            isCompleted
-              ? "bg-emerald-500 border-emerald-600 text-white"
-              : "border-slate-300 hover:border-emerald-500 bg-white"
-          }`}
-        >
-          {isCompleted && (
-            <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-            </svg>
-          )}
-        </button>
         <div className="flex-1 min-w-0 overflow-hidden">
           {/* Project and Task tags at the top */}
           <div className="flex items-center gap-1 mb-1.5 flex-wrap">
@@ -790,27 +769,6 @@ const GanttTaskCard = React.memo(function GanttTaskCard({
       }}
     >
       <div className="flex items-start gap-1.5 pl-1">
-        <button
-          type="button"
-          draggable={false}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            onUpdate({ status: isCompleted ? 'backlog' : 'completed' })
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-          className={`mt-0.5 w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 smooth-transition ${
-            isCompleted
-              ? "bg-emerald-500 border-emerald-600 text-white"
-              : "border-slate-300 hover:border-emerald-500 bg-white"
-          }`}
-        >
-          {isCompleted && (
-            <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-            </svg>
-          )}
-        </button>
         <div className="flex-1 min-w-0 overflow-hidden">
           {/* Project tag at the top */}
           <div className="flex items-center gap-1 mb-1.5 flex-wrap">
@@ -3507,6 +3465,77 @@ export default function TaskManager() {
                         // Check if this is a scheduled task being moved to a new time slot
                         const isScheduledTask = e.dataTransfer.types.includes('application/scheduled-task')
                         
+                        // Check if this is a routine instance being moved
+                        if (isScheduledTask && data.startsWith('routine-instance:')) {
+                          // This is a routine instance being moved - update its position
+                          e.preventDefault()
+                          e.stopPropagation()
+                          
+                          const [, instanceId] = data.split(':')
+                          const instance = routineInstances.find(inst => inst.id === instanceId)
+                          if (!instance) {
+                            console.warn('Could not find routine instance with id:', instanceId)
+                            return
+                          }
+                          
+                          const rect = e.currentTarget.getBoundingClientRect()
+                          const y = e.clientY - rect.top
+                          const hourHeight = rect.height / 20
+                          const hourIndex = Math.floor(y / hourHeight)
+                          const displayHour = 5 + Math.max(0, Math.min(19, hourIndex)) // Clamp between 5 AM (index 0) and 12 AM (index 19)
+                          // Convert display hour (5-24) to actual hour (5-23, 0)
+                          const hour = displayHour === 24 ? 0 : displayHour
+                          
+                          // Validate hour is within allowed range (5 AM to 12 AM)
+                          if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) {
+                            return // Invalid hour, don't reschedule
+                          }
+                          
+                          const newStart = new Date(day)
+                          newStart.setHours(hour, 0, 0, 0)
+                          
+                          // Calculate duration from the instance's totalPoints or storyPoints
+                          const durationHours = instance.type === 'task' 
+                            ? storyPointsToHours(instance.totalPoints)
+                            : storyPointsToHours(instance.storyPoints)
+                          const newEnd = new Date(newStart.getTime() + durationHours * 60 * 60 * 1000)
+                          
+                          // Check for overlaps (excluding the current instance being moved)
+                          const dayStart = new Date(day)
+                          dayStart.setHours(0, 0, 0, 0)
+                          const existingItemsOnDay = scheduledItems.filter(item => {
+                            const itemDate = new Date(item.startDate)
+                            itemDate.setHours(0, 0, 0, 0)
+                            return itemDate.getTime() === dayStart.getTime() && item.id !== instanceId
+                          })
+                          
+                          const hasOverlap = existingItemsOnDay.some(existingItem => {
+                            return newStart.getTime() < existingItem.endDate.getTime() && 
+                                   newEnd.getTime() > existingItem.startDate.getTime()
+                          })
+                          
+                          if (hasOverlap) {
+                            alert('Cannot schedule: This time slot overlaps with an existing task.')
+                            setDraggedTaskId(null)
+                            return
+                          }
+                          
+                          // Update the existing routine instance's position
+                          setRoutineInstances(prev => prev.map(inst => {
+                            if (inst.id === instanceId) {
+                              return {
+                                ...inst,
+                                startDate: newStart.toISOString(),
+                                dueDate: newEnd.toISOString(),
+                              }
+                            }
+                            return inst
+                          }))
+                          
+                          setDraggedTaskId(null)
+                          return
+                        }
+                        
                         if (isScheduledTask && (data.startsWith('gantt-task:') || data.startsWith('gantt-subtask:'))) {
                           // This is a scheduled task being moved - reschedule it
                         e.preventDefault()
@@ -3933,34 +3962,50 @@ export default function TaskManager() {
                                 // Handle save edits
                                 const handleSaveEdit = () => {
                                   const hoursValue = parseFloat(editingBlockHours) || 0.5
+                                  const trimmedName = editingBlockName.trim()
+                                  
                                   if (isRoutineInstance) {
-                                    // Update routine instance first - this updates the scheduled block immediately
-                                    setRoutineInstances(prev => prev.map(inst => {
-                                      if (inst.id === item.id) {
-                                        const startDate = new Date(inst.startDate)
-                                        const newEndDate = new Date(startDate.getTime() + hoursValue * 60 * 60 * 1000)
-                                        return {
-                                          ...inst,
-                                          name: editingBlockName.trim() || inst.name,
-                                          totalPoints: item.type === 'task' ? hoursValue : undefined,
-                                          storyPoints: item.type === 'subtask' ? hoursValue : undefined,
-                                          dueDate: newEndDate.toISOString(), // Update endDate based on new duration
+                                    // Find the instance being edited BEFORE state update to get identifying info
+                                    // This avoids stale closure issues
+                                    const editedInstance = routineInstances.find(inst => inst.id === item.id)
+                                    if (!editedInstance) {
+                                      console.warn('Could not find routine instance with id:', item.id)
+                                      return
+                                    }
+                                    
+                                    const { originalId, type: instanceType, projectId, taskId, subtaskId } = editedInstance
+                                    const finalName = trimmedName || editedInstance.name
+                                    
+                                    // Update ALL routine instances with the same originalId and type
+                                    // This ensures all instances of the same routine task update together
+                                    setRoutineInstances(prev => {
+                                      return prev.map(inst => {
+                                        // Match by originalId and type to find all instances of the same routine task
+                                        if (inst.originalId === originalId && inst.type === instanceType) {
+                                          const startDate = new Date(inst.startDate)
+                                          const newEndDate = new Date(startDate.getTime() + hoursValue * 60 * 60 * 1000)
+                                          return {
+                                            ...inst,
+                                            name: finalName,
+                                            totalPoints: instanceType === 'task' ? hoursValue : inst.totalPoints,
+                                            storyPoints: instanceType === 'subtask' ? hoursValue : inst.storyPoints,
+                                            dueDate: newEndDate.toISOString(), // Update endDate based on new duration
+                                          }
                                         }
-                                      }
-                                      return inst
-                                    }))
+                                        return inst
+                                      })
+                                    })
                                     
                                     // Update the original routine task in the Routine project
                                     // This ensures the sidebar shows the updated hours
-                                    // Use a longer delay to ensure projects state has updated
-                                    if (item.type === 'task' && item.taskId && item.projectId && updateGanttTask) {
-                                      updateGanttTask(item.projectId, item.taskId, {
-                                        name: editingBlockName.trim() || item.name,
+                                    if (instanceType === 'task' && taskId && projectId && updateGanttTask) {
+                                      updateGanttTask(projectId, taskId, {
+                                        name: finalName,
                                         totalPoints: hoursValue,
                                       } as any)
-                                    } else if (item.type === 'subtask' && item.taskId && item.subtaskId && item.projectId && updateGanttSubtask) {
-                                      updateGanttSubtask(item.projectId, item.taskId, item.subtaskId, {
-                                        name: editingBlockName.trim() || item.name,
+                                    } else if (instanceType === 'subtask' && taskId && subtaskId && projectId && updateGanttSubtask) {
+                                      updateGanttSubtask(projectId, taskId, subtaskId, {
+                                        name: finalName,
                                         storyPoints: hoursValue,
                                       } as any)
                                     }
@@ -4032,7 +4077,11 @@ export default function TaskManager() {
                             e.dataTransfer.effectAllowed = 'move'
                             // Mark this as a scheduled task being dragged
                             e.dataTransfer.setData('application/scheduled-task', 'true')
-                            if (item.type === 'task' && item.taskId) {
+                            // If it's a routine instance, store the instance ID so we can update it instead of creating a new one
+                            if (isRoutineInstance) {
+                              e.dataTransfer.setData('text/plain', `routine-instance:${item.id}`)
+                              setDraggedItemData({ type: item.type, projectId: item.projectId, taskId: item.taskId, subtaskId: item.subtaskId })
+                            } else if (item.type === 'task' && item.taskId) {
                               e.dataTransfer.setData('text/plain', `gantt-task:${item.projectId}:${item.taskId}`)
                               setDraggedItemData({ type: 'task', projectId: item.projectId, taskId: item.taskId })
                             } else if (item.type === 'subtask' && item.taskId && item.subtaskId) {
@@ -4058,7 +4107,6 @@ export default function TaskManager() {
                                     minHeight: isEditing ? `${editHeight}px` : `${heightPixels}px`,
                                     backgroundColor: item.taskColor ? hexToRgba(item.taskColor, 0.15) : hexToRgba(item.projectColor, 0.15),
                                     borderLeftColor: item.projectColor,
-                                    marginLeft: leftPercent > 0 ? '2px' : '4px',
                                     marginRight: '4px',
                                     zIndex: isEditing ? 50 : 20, // Higher z-index when editing to ensure it's on top
                                   }}
