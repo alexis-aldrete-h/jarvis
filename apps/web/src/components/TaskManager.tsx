@@ -3662,13 +3662,17 @@ export default function TaskManager() {
                         e.stopPropagation()
                         e.dataTransfer.dropEffect = 'move'
                           
-                          // Calculate which hour slot the drag is over
+                          // Calculate which 30-minute slot the drag is over
                           const rect = e.currentTarget.getBoundingClientRect()
                           const y = e.clientY - rect.top
-                          const hourHeight = rect.height / 20
-                          const hourIndex = Math.floor(y / hourHeight)
+                          const hourHeight = rect.height / 20 // Each hour is 64px
+                          const totalMinutes = (y / hourHeight) * 60 // Convert pixel position to minutes from start of day
+                          const totalMinutesRounded = Math.round(totalMinutes / 30) * 30 // Snap to nearest 30-minute interval
+                          
+                          const hourIndex = Math.floor(totalMinutesRounded / 60)
                           const displayHour = 5 + Math.max(0, Math.min(19, hourIndex)) // Clamp between 5 AM (index 0) and 12 AM (index 19)
                           const hour = displayHour === 24 ? 0 : displayHour
+                          const minutes = totalMinutesRounded % 60 // Will be 0 or 30
                           
                           // Only highlight if hour is valid (5 AM - 12 AM)
                           if ((hour >= 5 && hour < 24) || hour === 0) {
@@ -3680,30 +3684,10 @@ export default function TaskManager() {
                             if (currentData) {
                               setDraggedItemData(currentData)
                               
-                              // Calculate which half of the hour is being hovered (for tasks < 1 hour)
+                              // Always show which 30-minute slot is being hovered (upper or lower half of hour)
                               const positionInHour = (y % hourHeight) / hourHeight // 0 to 1
                               const isUpperHalf = positionInHour <= 0.5
-                              
-                              // Get duration of dragged item to determine if it's < 1 hour
-                              let durationHours = 1 // Default
-                              if (currentData.type === 'task') {
-                                const task = projects.find(p => p.id === currentData.projectId)?.children?.find(t => t.id === currentData.taskId)
-                                if (task) {
-                                  durationHours = storyPointsToHours((task as any).totalPoints)
-                                }
-                              } else if (currentData.type === 'subtask' && currentData.subtaskId) {
-                                const subtask = projects.find(p => p.id === currentData.projectId)?.children?.find(t => t.id === currentData.taskId)?.children?.find(st => st.id === currentData.subtaskId)
-                                if (subtask) {
-                                  durationHours = storyPointsToHours(subtask.storyPoints)
-                                }
-                              }
-                              
-                              // Only show half highlight for tasks < 1 hour
-                              if (durationHours < 1) {
-                                setDragOverHalf(isUpperHalf ? 'upper' : 'lower')
-                              } else {
-                                setDragOverHalf(null)
-                              }
+                              setDragOverHalf(isUpperHalf ? 'upper' : 'lower')
                             } else {
                               setDragOverHalf(null)
                             }
@@ -3731,20 +3715,16 @@ export default function TaskManager() {
                         setDraggedItemData(null)
                         draggedItemDataRef.current = null
                         
-                        // Helper function to calculate hour and minutes based on click position and task duration
-                        const calculateTimeFromPosition = (y: number, rect: DOMRect, durationHours: number): { hour: number; minutes: number } => {
-                          const hourHeight = rect.height / 20
-                          const hourIndex = Math.floor(y / hourHeight)
+                        // Helper function to calculate hour and minutes based on click position - always snaps to 30-minute intervals
+                        const calculateTimeFromPosition = (y: number, rect: DOMRect): { hour: number; minutes: number } => {
+                          const hourHeight = rect.height / 20 // Each hour is 64px (h-16)
+                          const totalMinutes = (y / hourHeight) * 60 // Convert pixel position to minutes from start of day
+                          const totalMinutesRounded = Math.round(totalMinutes / 30) * 30 // Snap to nearest 30-minute interval
+                          
+                          const hourIndex = Math.floor(totalMinutesRounded / 60)
                           const displayHour = 5 + Math.max(0, Math.min(19, hourIndex)) // Clamp between 5 AM (index 0) and 12 AM (index 19)
                           const hour = displayHour === 24 ? 0 : displayHour
-                          
-                          // For tasks less than an hour, allow placement in upper or lower half
-                          let minutes = 0
-                          if (durationHours < 1) {
-                            const positionInHour = (y % hourHeight) / hourHeight // 0 to 1
-                            // If clicked in lower half of hour (position > 0.5), place at :30
-                            minutes = positionInHour > 0.5 ? 30 : 0
-                          }
+                          const minutes = totalMinutesRounded % 60 // Will be 0 or 30
                           
                           return { hour, minutes }
                         }
@@ -3775,7 +3755,7 @@ export default function TaskManager() {
                         
                           const rect = e.currentTarget.getBoundingClientRect()
                           const y = e.clientY - rect.top
-                          const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                          const { hour, minutes } = calculateTimeFromPosition(y, rect)
                           
                           // Validate hour is within allowed range (5 AM to 12 AM)
                           if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) {
@@ -3835,7 +3815,7 @@ export default function TaskManager() {
                             const task = projects.find(p => p.id === projectId)?.children?.find(t => t.id === taskId)
                             if (task && updateGanttTask) {
                               const durationHours = storyPointsToHours((task as any).totalPoints)
-                              const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                              const { hour, minutes } = calculateTimeFromPosition(y, rect)
                               
                               // Validate hour is within allowed range (5 AM to 12 AM)
                               if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) {
@@ -3876,7 +3856,7 @@ export default function TaskManager() {
                             const subtask = projects.find(p => p.id === projectId)?.children?.find(t => t.id === taskId)?.children?.find(st => st.id === subtaskId)
                             if (subtask && updateGanttSubtask) {
                               const durationHours = storyPointsToHours(subtask.storyPoints)
-                              const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                              const { hour, minutes } = calculateTimeFromPosition(y, rect)
                               
                               // Validate hour is within allowed range (5 AM to 12 AM)
                               if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) {
@@ -3947,7 +3927,7 @@ export default function TaskManager() {
                             
                             const rect = e.currentTarget.getBoundingClientRect()
                             const y = e.clientY - rect.top
-                            const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                            const { hour, minutes } = calculateTimeFromPosition(y, rect)
                             
                             // Ensure hour is within 5 AM to 12 AM range
                             if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) return
@@ -4014,7 +3994,7 @@ export default function TaskManager() {
                             
                             const rect = e.currentTarget.getBoundingClientRect()
                             const y = e.clientY - rect.top
-                            const { hour, minutes } = calculateTimeFromPosition(y, rect, durationHours)
+                            const { hour, minutes } = calculateTimeFromPosition(y, rect)
                             
                             // Ensure hour is within 5 AM to 12 AM range
                             if ((hour < 5 && hour !== 0) || (hour > 23 && hour !== 0)) return
@@ -4087,7 +4067,7 @@ export default function TaskManager() {
                     >
                       {Array.from({ length: 20 }, (_, i) => {
                         const displayHour = 5 + i // Display hour: 5-24 (where 24 = 12 AM)
-                        // Find tasks that start at this hour on this day
+                        // Find tasks that START in this hour slot (not just overlap)
                         // Calculate the actual hour range for this slot
                         const actualHour = displayHour === 24 ? 0 : displayHour
                         const slotStart = new Date(day)
@@ -4110,14 +4090,15 @@ export default function TaskManager() {
                           
                           if (!isSameDay) return false
                           
-                          // Check if item overlaps with this hour slot
-                          // Item overlaps if it starts before the slot ends and ends after the slot starts
-                          const itemStart = item.startDate.getTime()
-                          const itemEnd = item.endDate.getTime()
-                          const slotStartTime = slotStart.getTime()
-                          const slotEndTime = slotEnd.getTime()
+                          // Only include tasks that START in this hour slot
+                          // A task should be rendered in the hour slot where its start hour matches
+                          const itemStartHour = item.startDate.getHours()
                           
-                          return itemStart < slotEndTime && itemEnd > slotStartTime
+                          // Handle edge case: hour 0 (midnight) should match displayHour 24
+                          const normalizedItemHour = itemStartHour === 0 ? 24 : itemStartHour
+                          const normalizedDisplayHour = actualHour === 0 ? 24 : actualHour
+                          
+                          return normalizedItemHour === normalizedDisplayHour
                         })
                   
                   // Check if this hour slot is being dragged over
@@ -4132,7 +4113,10 @@ export default function TaskManager() {
                               isDragOverThisSlot && !dragOverHalf ? 'bg-blue-100/50 ring-2 ring-blue-400 ring-inset' : ''
                             }`}
                     >
-                      {/* Highlight for upper or lower half when dragging 30-min task */}
+                      {/* 30-minute divider line */}
+                      <div className="absolute left-0 right-0 top-1/2 border-t border-slate-200/60 pointer-events-none z-0" />
+                      
+                      {/* Highlight for upper or lower half when dragging (30-minute slot) */}
                       {isDragOverThisSlot && dragOverHalf && (
                         <div
                           className={`absolute left-0 right-0 border-2 border-dashed border-blue-500 bg-blue-200/40 z-10 pointer-events-none ${
@@ -4159,25 +4143,87 @@ export default function TaskManager() {
                               
                               const previewHeight = Math.round(durationHours * 64) // Each hour is 64px
                               
-                              // For tasks < 1 hour, position based on which half is hovered
-                              let previewTop = 0
-                              if (durationHours < 1 && dragOverHalf) {
-                                previewTop = dragOverHalf === 'upper' ? 0 : 32 // 32px = half of 64px hour height
+                              // Always position based on 30-minute slot (upper or lower half)
+                              // Default to upper half if dragOverHalf is not set (shouldn't happen, but safety check)
+                              const half = dragOverHalf || 'upper'
+                              const previewTop = half === 'upper' ? 0 : 32 // 32px = half of 64px hour height
+                              
+                              // Calculate exact start and end times for preview
+                              const actualHour = displayHour === 24 ? 0 : displayHour
+                              const startMinutes = half === 'lower' ? 30 : 0
+                              const previewStart = new Date(day)
+                              previewStart.setHours(actualHour, startMinutes, 0, 0)
+                              const previewEnd = new Date(previewStart.getTime() + durationHours * 60 * 60 * 1000)
+                              
+                              // Check for overlaps to show invalid drop zone
+                              const dayStart = new Date(day)
+                              dayStart.setHours(0, 0, 0, 0)
+                              const existingItemsOnDay = scheduledItems.filter(item => {
+                                const itemDate = new Date(item.startDate)
+                                itemDate.setHours(0, 0, 0, 0)
+                                return itemDate.getTime() === dayStart.getTime()
+                              })
+                              
+                              const hasOverlap = existingItemsOnDay.some(existingItem => {
+                                return previewStart.getTime() < existingItem.endDate.getTime() && 
+                                       previewEnd.getTime() > existingItem.startDate.getTime()
+                              })
+                              
+                              const formatTime = (date: Date) => {
+                                const hours = date.getHours()
+                                const minutes = date.getMinutes()
+                                const ampm = hours >= 12 ? 'PM' : 'AM'
+                                const displayHours = hours % 12 || 12
+                                const displayMinutes = minutes > 0 ? `:${minutes.toString().padStart(2, '0')}` : ''
+                                return `${displayHours}${displayMinutes} ${ampm}`
                               }
 
                           return (
-                                <div
-                                  className="absolute left-0 right-0 rounded-md border-2 border-dashed border-blue-400 bg-blue-100/30 z-10 pointer-events-none"
-                                  style={{
-                                    top: `${previewTop}px`,
-                                    height: `${previewHeight}px`,
-                                    minHeight: '32px',
-                                  }}
-                                />
+                                <>
+                                  <div
+                                    className={`absolute left-0 right-0 rounded-md border-2 border-dashed z-10 pointer-events-none ${
+                                      hasOverlap 
+                                        ? 'border-red-400 bg-red-100/30' 
+                                        : 'border-blue-400 bg-blue-100/30'
+                                    }`}
+                                    style={{
+                                      top: `${previewTop}px`,
+                                      height: `${previewHeight}px`,
+                                      minHeight: '32px',
+                                    }}
+                                  />
+                                  {/* Show exact start/end time tooltip */}
+                                  <div
+                                    className="absolute left-1/2 transform -translate-x-1/2 -translate-y-full mb-1 bg-slate-900 text-white text-[10px] px-2 py-1 rounded shadow-lg z-20 pointer-events-none whitespace-nowrap"
+                                    style={{
+                                      top: `${previewTop}px`,
+                                    }}
+                                  >
+                                    {formatTime(previewStart)} - {formatTime(previewEnd)}
+                                    {hasOverlap && <div className="text-red-300 mt-0.5">⚠ Overlaps with existing task</div>}
+                                  </div>
+                                </>
                               )
                             })()}
                             {/* Render task blocks that start at this hour */}
                             {(() => {
+                              // Helper function to format duration as hours and minutes
+                              const formatDuration = (hours: number): string => {
+                                if (hours === 0.5) return '30 min'
+                                if (hours === 1) return '1 hr'
+                                
+                                const wholeHours = Math.floor(hours)
+                                const minutes = Math.round((hours - wholeHours) * 60)
+                                
+                                if (wholeHours === 0) {
+                                  return `${minutes} min`
+                                } else if (minutes === 0) {
+                                  return `${wholeHours} ${wholeHours === 1 ? 'hr' : 'hrs'}`
+                                } else {
+                                  return `${wholeHours} ${wholeHours === 1 ? 'hr' : 'hrs'} ${minutes} min`
+                                }
+                              }
+                              
                               // Calculate layout for overlapping tasks
                               // Group tasks by their time ranges to detect overlaps
                               const layoutItems = tasksAtThisHour.map((item, index) => {
@@ -4473,14 +4519,16 @@ export default function TaskManager() {
                             setDragOverHour(null)
                             setDraggedItemData(null)
                           }}
-                                  className={`group absolute rounded-md border-l-2 shadow-sm z-20 flex flex-col overflow-visible ${isEditing ? 'cursor-default ring-2 ring-blue-400 p-1.5' : heightPixels < 40 ? 'p-0.5 cursor-move hover:shadow-md' : 'p-1.5 cursor-move hover:shadow-md'} transition-all duration-200`}
+                                  className={`group absolute rounded-md border-l-2 shadow-sm z-20 flex flex-col overflow-visible ${isEditing ? 'cursor-default ring-2 ring-blue-400 p-1.5' : heightPixels < 64 ? 'p-0.5 cursor-move hover:shadow-md' : 'p-1.5 cursor-move hover:shadow-md'} transition-all duration-200`}
                           style={{
                                     top: `${topOffset}px`,
                                     left: `${leftPercent}%`,
                                     width: `${widthPercent}%`,
                                     height: isEditing ? `${editHeight}px` : `${heightPixels}px`,
                                     minHeight: isEditing ? `${editHeight}px` : `${heightPixels}px`,
-                                    backgroundColor: item.taskColor ? hexToRgba(item.taskColor, 0.15) : hexToRgba(item.projectColor, 0.15),
+                                    backgroundColor: isEditing 
+                                      ? (item.taskColor || item.projectColor) // Full opacity when editing
+                                      : (item.taskColor ? hexToRgba(item.taskColor, 0.15) : hexToRgba(item.projectColor, 0.15)), // Transparent when not editing
                                     borderLeftColor: item.projectColor,
                                     marginRight: '4px',
                                     zIndex: isEditing ? 50 : 20, // Higher z-index when editing to ensure it's on top
@@ -4583,8 +4631,8 @@ export default function TaskManager() {
                                   ) : (
                                     // Display mode
                                     <>
-                                  {/* Compact layout for short blocks (30 min or less) */}
-                                  {heightPixels < 40 ? (
+                                  {/* Compact layout for short blocks (less than 1 hour) */}
+                                  {heightPixels < 64 ? (
                                     <div className="flex flex-col gap-0.5 h-full justify-center min-h-0 overflow-hidden">
                                       {/* Single line layout for very short blocks (30 min) - prioritize task name */}
                                       {heightPixels < 35 ? (
@@ -4601,7 +4649,7 @@ export default function TaskManager() {
                                             </span>
                                             {item.durationHours > 0 && (
                                               <p className="text-[7px] text-slate-600 leading-tight whitespace-nowrap">
-                                                {item.durationHours === 0.5 ? '30 min' : item.durationHours === 1 ? '1 hr' : `${item.durationHours} hrs`}
+                                                {formatDuration(item.durationHours)}
                                               </p>
                                             )}
                                           </div>
@@ -4629,7 +4677,7 @@ export default function TaskManager() {
                                           </p>
                                           {item.durationHours > 0 && (
                                             <p className="text-[7px] text-slate-600 leading-tight">
-                                              {item.durationHours === 0.5 ? '30 min' : item.durationHours === 1 ? '1 hr' : `${item.durationHours} hrs`}
+                                              {formatDuration(item.durationHours)}
                                             </p>
                                           )}
                                         </div>
@@ -4658,7 +4706,7 @@ export default function TaskManager() {
                                   </p>
                                   {item.durationHours > 0 && (
                                     <p className="text-[8px] text-slate-600 mt-0.5">
-                                      {item.durationHours === 0.5 ? '30 min' : item.durationHours === 1 ? '1 hr' : `${item.durationHours} hrs`}
+                                      {formatDuration(item.durationHours)}
                                     </p>
                                       )}
                                     </>
@@ -4715,6 +4763,22 @@ export default function TaskManager() {
                   return `${displayHours}${displayMinutes} ${ampm}`
                 }
                 
+                const formatDuration = (hours: number): string => {
+                  if (hours === 0.5) return '30 min'
+                  if (hours === 1) return '1 hr'
+                  
+                  const wholeHours = Math.floor(hours)
+                  const minutes = Math.round((hours - wholeHours) * 60)
+                  
+                  if (wholeHours === 0) {
+                    return `${minutes} min`
+                  } else if (minutes === 0) {
+                    return `${wholeHours} ${wholeHours === 1 ? 'hr' : 'hrs'}`
+                  } else {
+                    return `${wholeHours} ${wholeHours === 1 ? 'hr' : 'hrs'} ${minutes} min`
+                  }
+                }
+                
                 const startTime = new Date(hoveredItem.startDate)
                 const endTime = new Date(hoveredItem.endDate)
                 
@@ -4750,7 +4814,7 @@ export default function TaskManager() {
                         <div className="flex items-center gap-1.5">
                           <span className="text-slate-400">Duration:</span>
                           <span className="font-medium">
-                            {hoveredItem.durationHours === 0.5 ? '30 min' : hoveredItem.durationHours === 1 ? '1 hr' : `${hoveredItem.durationHours} hrs`}
+                            {formatDuration(hoveredItem.durationHours)}
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5">
