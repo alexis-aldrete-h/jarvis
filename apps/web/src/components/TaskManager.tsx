@@ -1105,6 +1105,10 @@ export default function TaskManager() {
   const [editingBlockHours, setEditingBlockHours] = useState<string>('1')
   // Track clicks for manual double-click detection (needed because draggable interferes with native double-click)
   const [lastClickInfo, setLastClickInfo] = useState<{ id: string; time: number } | null>(null)
+  // State for tooltip
+  const [hoveredBlockId, setHoveredBlockId] = useState<string | null>(null)
+  const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null)
+  const tooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   // Force re-render after updates
   const [updateTrigger, setUpdateTrigger] = useState(0)
   // State for delete confirmation modal for sprint/routine tasks
@@ -1171,6 +1175,16 @@ export default function TaskManager() {
       localStorage.setItem(ROUTINE_INSTANCES_KEY, JSON.stringify(routineInstances))
     }
   }, [routineInstances])
+  
+  // Cleanup tooltip timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (tooltipTimeoutRef.current) {
+        clearTimeout(tooltipTimeoutRef.current)
+      }
+    }
+  }, [])
+  
   const [resizeStartCol, setResizeStartCol] = useState<number>(0)
 
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null)
@@ -1794,6 +1808,40 @@ export default function TaskManager() {
 
     return items
   }, [projects, currentWeekStart, routineInstances])
+
+  // Calculate total hours per day
+  const hoursPerDay = useMemo(() => {
+    const hoursMap = new Map<string, number>()
+    
+    // Initialize all week days to 0
+    weekDays.forEach((day) => {
+      const dayCopy = new Date(day)
+      dayCopy.setHours(0, 0, 0, 0)
+      const dayKey = `${dayCopy.getFullYear()}-${String(dayCopy.getMonth() + 1).padStart(2, '0')}-${String(dayCopy.getDate()).padStart(2, '0')}`
+      hoursMap.set(dayKey, 0)
+    })
+    
+    // Sum hours for each scheduled item
+    scheduledItems.forEach((item) => {
+      const itemDate = new Date(item.startDate)
+      itemDate.setHours(0, 0, 0, 0)
+      const itemKey = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}-${String(itemDate.getDate()).padStart(2, '0')}`
+      
+      // Check if this item's date matches any of the week days
+      const matchingDay = weekDays.find(day => {
+        const dayCopy = new Date(day)
+        dayCopy.setHours(0, 0, 0, 0)
+        return dayCopy.getTime() === itemDate.getTime()
+      })
+      
+      if (matchingDay) {
+        const currentHours = hoursMap.get(itemKey) || 0
+        hoursMap.set(itemKey, currentHours + item.durationHours)
+      }
+    })
+    
+    return hoursMap
+  }, [scheduledItems, weekDays])
 
   // Build a quick lookup set of scheduled ids (tasks & subtasks) for the current week
   const scheduledIdsThisWeek = useMemo(() => {
@@ -3534,7 +3582,7 @@ export default function TaskManager() {
                     <div
                       key={idx}
                       className={`text-center pb-3 border-b-2 ${
-                        isToday ? 'border-blue-500' : 'border-transparent'
+                        isToday ? 'border-black' : 'border-transparent'
                       }`}
                     >
                       <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-1">
@@ -3542,13 +3590,27 @@ export default function TaskManager() {
                       </p>
                       <div className={`inline-flex items-center justify-center w-8 h-8 rounded-lg ${
                         isToday 
-                          ? 'bg-gradient-to-br from-blue-500 to-orange-500 text-white shadow-md' 
+                          ? 'bg-black text-white shadow-md' 
                           : 'bg-slate-100 text-slate-700'
                       }`}>
                         <p className={`text-sm font-bold ${isToday ? "text-white" : "text-slate-700"}`}>
                         {day.getDate()}
                       </p>
                       </div>
+                      {(() => {
+                        const dayCopy = new Date(day)
+                        dayCopy.setHours(0, 0, 0, 0)
+                        const dayKey = `${dayCopy.getFullYear()}-${String(dayCopy.getMonth() + 1).padStart(2, '0')}-${String(dayCopy.getDate()).padStart(2, '0')}`
+                        const totalHours = hoursPerDay.get(dayKey) || 0
+                        const hoursDisplay = totalHours > 0 ? `${totalHours.toFixed(1)}h` : '0h'
+                        return (
+                          <p className={`text-[10px] mt-1.5 font-medium ${
+                            isToday ? 'text-white' : 'text-slate-500'
+                          }`}>
+                            {hoursDisplay}
+                          </p>
+                        )
+                      })()}
                     </div>
                   )
                 })}
@@ -4043,7 +4105,7 @@ export default function TaskManager() {
                           
                           // Check if item is on the same day
                           const isSameDay = itemDay === dayDate && 
-                                           itemMonth === dayMonth && 
+                                 itemMonth === dayMonth && 
                                            itemYear === dayYear
                           
                           if (!isSameDay) return false
@@ -4078,7 +4140,7 @@ export default function TaskManager() {
                           }`}
                         />
                       )}
-                      {/* Preview block showing where the task would be dropped */}
+                            {/* Preview block showing where the task would be dropped */}
                             {isDragOverThisSlot && draggedItemData && (() => {
                               // Get the dragged item data to calculate duration
                               let durationHours = 1 // Default
@@ -4325,11 +4387,57 @@ export default function TaskManager() {
                           onClick={handleClick}
                           onDoubleClick={handleDoubleClick}
                           title={!isEditing ? "Double-click to edit" : ""}
+                          onMouseEnter={(e) => {
+                            if (!isEditing) {
+                              // Clear any existing timeout
+                              if (tooltipTimeoutRef.current) {
+                                clearTimeout(tooltipTimeoutRef.current)
+                              }
+                              
+                              // Store reference to the element
+                              const element = e.currentTarget
+                              
+                              // Set a 2-second delay before showing tooltip
+                              tooltipTimeoutRef.current = setTimeout(() => {
+                                // Check if element still exists and is in the DOM
+                                if (element && element.getBoundingClientRect) {
+                                  try {
+                                    const rect = element.getBoundingClientRect()
+                                    setHoveredBlockId(item.id)
+                                    setTooltipPosition({
+                                      x: rect.left + rect.width / 2,
+                                      y: rect.top - 10
+                                    })
+                                  } catch (error) {
+                                    // Element might have been removed, silently fail
+                                    console.warn('Could not get bounding rect for tooltip:', error)
+                                  }
+                                }
+                              }, 2000)
+                            }
+                          }}
+                          onMouseLeave={() => {
+                            // Clear timeout if mouse leaves before 2 seconds
+                            if (tooltipTimeoutRef.current) {
+                              clearTimeout(tooltipTimeoutRef.current)
+                              tooltipTimeoutRef.current = null
+                            }
+                            setHoveredBlockId(null)
+                            setTooltipPosition(null)
+                          }}
                           onDragStart={(e) => {
                             if (isEditing) {
                               e.preventDefault()
                               return
                             }
+                            // Clear tooltip timeout when dragging starts
+                            if (tooltipTimeoutRef.current) {
+                              clearTimeout(tooltipTimeoutRef.current)
+                              tooltipTimeoutRef.current = null
+                            }
+                            setHoveredBlockId(null)
+                            setTooltipPosition(null)
+                            
                             // Prevent drag if this might be a double-click attempt
                             if (lastClickInfo && lastClickInfo.id === item.id) {
                               const timeSinceClick = Date.now() - lastClickInfo.time
@@ -4592,6 +4700,81 @@ export default function TaskManager() {
                   </div>
                 </div>
               </div>
+              
+              {/* Tooltip for task blocks */}
+              {hoveredBlockId && tooltipPosition && (() => {
+                const hoveredItem = scheduledItems.find(item => item.id === hoveredBlockId)
+                if (!hoveredItem) return null
+                
+                const formatTime = (date: Date) => {
+                  const hours = date.getHours()
+                  const minutes = date.getMinutes()
+                  const ampm = hours >= 12 ? 'PM' : 'AM'
+                  const displayHours = hours % 12 || 12
+                  const displayMinutes = minutes > 0 ? `:${minutes.toString().padStart(2, '0')}` : ''
+                  return `${displayHours}${displayMinutes} ${ampm}`
+                }
+                
+                const startTime = new Date(hoveredItem.startDate)
+                const endTime = new Date(hoveredItem.endDate)
+                
+                return (
+                  <div
+                    className="fixed z-50 bg-slate-900 text-white text-xs rounded-lg shadow-xl p-3 pointer-events-none max-w-xs"
+                    style={{
+                      left: `${tooltipPosition.x}px`,
+                      top: `${tooltipPosition.y}px`,
+                      transform: 'translate(-50%, -100%)',
+                      marginTop: '-8px'
+                    }}
+                  >
+                    <div className="space-y-1.5">
+                      <div className="font-semibold text-sm text-white">{hoveredItem.name}</div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded font-medium text-white"
+                          style={{ backgroundColor: hoveredItem.projectColor }}
+                        >
+                          {hoveredItem.projectName}
+                        </span>
+                        {hoveredItem.taskName && (
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded font-medium text-white"
+                            style={{ backgroundColor: hoveredItem.taskColor || hoveredItem.projectColor }}
+                          >
+                            {hoveredItem.taskName}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-slate-300 space-y-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-400">Duration:</span>
+                          <span className="font-medium">
+                            {hoveredItem.durationHours === 0.5 ? '30 min' : hoveredItem.durationHours === 1 ? '1 hr' : `${hoveredItem.durationHours} hrs`}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-400">Time:</span>
+                          <span className="font-medium">
+                            {formatTime(startTime)} - {formatTime(endTime)}
+                          </span>
+                        </div>
+                        {hoveredItem.type === 'subtask' && (
+                          <div className="text-slate-400 text-[10px]">Subtask</div>
+                        )}
+                        {hoveredItem.id.startsWith('routine-instance-') && (
+                          <div className="text-slate-400 text-[10px]">Routine Task</div>
+                        )}
+                      </div>
+                    </div>
+                    {/* Arrow pointing down */}
+                    <div
+                      className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent"
+                      style={{ borderTopColor: '#1e293b' }}
+                    />
+                  </div>
+                )
+              })()}
             </section>
               )}
 
