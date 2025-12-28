@@ -1851,16 +1851,28 @@ export default function TaskManager() {
   }, [scheduledItems])
 
   // Tasks and subtasks currently in the Sprint column (for weekly schedule sidebar)
-  // Hide items that are already scheduled this week
+  // Hide items that have been scheduled (have startDate with time component) - regardless of which week
   const sprintTasksForSchedule = useMemo(() => {
     const tasks = groupedGanttSubtasks.find(c => c.status === 'sprint')?.ganttTasks || []
-    return tasks.filter(({ ganttTask }) => !scheduledIdsThisWeek.has(ganttTask.id))
-  }, [groupedGanttSubtasks, scheduledIdsThisWeek])
+    return tasks.filter(({ ganttTask }) => {
+      // Remove from Sprint Tasks if the task has been scheduled (has startDate with time component)
+      if (ganttTask.startDate && ganttTask.startDate.includes('T')) {
+        return false
+      }
+      return true
+    })
+  }, [groupedGanttSubtasks])
 
   const sprintSubtasksForSchedule = useMemo(() => {
     const subtasks = groupedGanttSubtasks.find(c => c.status === 'sprint')?.ganttSubtasks || []
-    return subtasks.filter(({ ganttSubtask }) => !scheduledIdsThisWeek.has(ganttSubtask.id))
-  }, [groupedGanttSubtasks, scheduledIdsThisWeek])
+    return subtasks.filter(({ ganttSubtask }) => {
+      // Remove from Sprint Tasks if the subtask has been scheduled (has startDate with time component)
+      if (ganttSubtask.startDate && ganttSubtask.startDate.includes('T')) {
+        return false
+      }
+      return true
+    })
+  }, [groupedGanttSubtasks])
 
   // Tasks and subtasks currently in the Routine column (for weekly schedule sidebar)
   // Routine tasks stay in the column even when scheduled (they can be dragged multiple times)
