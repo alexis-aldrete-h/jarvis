@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState, useRef } from "react"
 import { Task, TaskPriority, TaskStatus, TaskDifficulty, Subtask } from "@jarvis/shared"
 import { useTasks } from "@/hooks/useTasks"
 import { useGanttContext } from "@/contexts/GanttContext"
+import { useDailyNotes } from "@/hooks/useDailyNotes"
 import { formatDate, getWeekStart, getWeekEnd } from "@jarvis/shared"
 import { GanttProject, GanttTask, GanttSubtask, GanttStatus } from "@jarvis/shared"
 import ProjectPlanner from "./ProjectPlanner"
@@ -13,6 +14,23 @@ import GanttV2Page from "./GanttV2Page"
 
 const POMODORO_WORK_DURATION = 25 * 60 // 25 minutes in seconds
 const POMODORO_REST_DURATION = 5 * 60 // 5 minutes in seconds
+const POMODORO_DURATION_MINUTES = 30 // Each pomodoro represents 30 minutes of actual work
+
+// Helper function to calculate actual time worked from pomodoros (in minutes)
+const calculateTimeFromPomodoros = (pomodoros: number | undefined): number => {
+  if (!pomodoros || pomodoros === 0) return 0
+  return pomodoros * POMODORO_DURATION_MINUTES
+}
+
+// Helper function to format time in minutes to readable format (e.g., "1 hr 45 min")
+const formatTimeWorked = (minutes: number): string => {
+  if (minutes === 0) return '0 min'
+  const hours = Math.floor(minutes / 60)
+  const mins = Math.round(minutes % 60)
+  if (hours === 0) return `${mins} min`
+  if (mins === 0) return `${hours} hr${hours !== 1 ? 's' : ''}`
+  return `${hours} hr${hours !== 1 ? 's' : ''} ${mins} min`
+}
 
 const priorityStyles: Record<TaskPriority, string> = {
   low: "text-blue-600 border-blue-300 bg-blue-50",
@@ -1193,6 +1211,69 @@ export default function TaskManager() {
   const [isRestPeriod, setIsRestPeriod] = useState(false)
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null)
   const [accumulatedTime, setAccumulatedTime] = useState(0) // in seconds
+  const [isDraggingTimer, setIsDraggingTimer] = useState(false)
+  const timerCircleRef = useRef<HTMLDivElement>(null)
+  
+  // Function to play alarm sound
+  const playAlarmSound = useRef(() => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext
+      if (!AudioContext) return
+      
+      const audioContext = new AudioContext()
+      const oscillator = audioContext.createOscillator()
+      const gainNode = audioContext.createGain()
+      
+      oscillator.connect(gainNode)
+      gainNode.connect(audioContext.destination)
+      
+      oscillator.frequency.value = 800 // Frequency in Hz
+      oscillator.type = 'sine'
+      
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5)
+      
+      oscillator.start(audioContext.currentTime)
+      oscillator.stop(audioContext.currentTime + 0.5)
+      
+      // Play a second beep after a short delay
+      setTimeout(() => {
+        try {
+          const oscillator2 = audioContext.createOscillator()
+          const gainNode2 = audioContext.createGain()
+          
+          oscillator2.connect(gainNode2)
+          gainNode2.connect(audioContext.destination)
+          
+          oscillator2.frequency.value = 800
+          oscillator2.type = 'sine'
+          
+          gainNode2.gain.setValueAtTime(0.3, audioContext.currentTime)
+          gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5)
+          
+          oscillator2.start(audioContext.currentTime)
+          oscillator2.stop(audioContext.currentTime + 0.5)
+        } catch (e) {
+          console.warn('Failed to play second alarm beep:', e)
+        }
+      }, 200)
+    } catch (e) {
+      console.warn('Failed to play alarm sound:', e)
+    }
+  })
+  const [showPomodoroTimer, setShowPomodoroTimer] = useState(true)
+  const [editingPomodoroTaskId, setEditingPomodoroTaskId] = useState<string | null>(null)
+  const [editingPomodoroValue, setEditingPomodoroValue] = useState<string>('')
+  
+  // Selected date for Today's Plan (defaults to today)
+  const [selectedPlanDate, setSelectedPlanDate] = useState<Date>(() => {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    return today
+  })
+  
+  // Notes for plan - persisted per day (with Supabase support)
+  const { notes: todayNotes, setNotes: setTodayNotes, isLoading: isLoadingNotes } = useDailyNotes(selectedPlanDate)
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined
@@ -1203,11 +1284,13 @@ export default function TaskManager() {
             // Timer finished
             if (isRestPeriod) {
               // Rest period finished, go back to work
+              playAlarmSound.current()
               setIsRestPeriod(false)
               setSecondsLeft(POMODORO_WORK_DURATION)
             setIsRunning(false)
             } else {
               // Work period finished, start rest
+              playAlarmSound.current()
               setIsRestPeriod(true)
               setSecondsLeft(POMODORO_REST_DURATION)
               // Save the work time (25 minutes) and add to time log
@@ -1224,10 +1307,12 @@ export default function TaskManager() {
                   type: 'work' as const,
                 }
                 const timeLog = task.timeLog || []
+                const pomodorosCompleted = ((task as any).pomodorosCompleted || 0) + 1
                 updateTask(focusTaskId, { 
                   timeSpent: currentTime + 25,
-                  timeLog: [...timeLog, timeEntry]
-                })
+                  timeLog: [...timeLog, timeEntry],
+                  pomodorosCompleted: pomodorosCompleted
+                } as any)
               }
             }
             return prev
@@ -1808,6 +1893,46 @@ export default function TaskManager() {
 
     return items
   }, [projects, currentWeekStart, routineInstances])
+
+  // Get selected day's non-routine tasks from scheduled items
+  const todaysNonRoutineTasks = useMemo(() => {
+    const selectedDate = new Date(selectedPlanDate)
+    selectedDate.setHours(0, 0, 0, 0)
+    
+    return scheduledItems.filter((item) => {
+      // Check if item is scheduled for the selected date
+      const itemDate = new Date(item.startDate)
+      itemDate.setHours(0, 0, 0, 0)
+      if (itemDate.getTime() !== selectedDate.getTime()) {
+        return false
+      }
+      
+      // Check if item is a routine instance (routine instances have IDs starting with 'routine-instance-')
+      if (item.id.startsWith('routine-instance-')) {
+        return false
+      }
+      
+      // Check if the original task/subtask has routine status
+      // Find the project and task/subtask to check status
+      const project = projects.find(p => p.id === item.projectId)
+      if (!project) return true
+      
+      if (item.type === 'task') {
+        const task = project.children?.find(t => t.id === item.taskId)
+        if (task && task.status === 'routine' as GanttStatus) {
+          return false
+        }
+      } else if (item.type === 'subtask' && item.taskId && item.subtaskId) {
+        const task = project.children?.find(t => t.id === item.taskId)
+        const subtask = task?.children?.find(s => s.id === item.subtaskId)
+        if (subtask && subtask.status === 'routine' as GanttStatus) {
+          return false
+        }
+      }
+      
+      return true
+    })
+  }, [scheduledItems, projects, selectedPlanDate])
 
   // Calculate total hours per day
   const hoursPerDay = useMemo(() => {
@@ -4856,100 +4981,788 @@ export default function TaskManager() {
 
 
               {view === "focus" && (
-        <section className="grid gap-5 lg:grid-cols-3">
-          <div className="panel p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-ink/80 text-white flex items-center justify-center">⏱</div>
-              <h3 className="text-lg text-ink font-semibold">Today's Plan</h3>
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Left Column - Tasks */}
+          <div className="panel p-4 space-y-4 bg-gradient-to-br from-white via-slate-50/30 to-white border border-slate-200/60 shadow-lg shadow-slate-200/50">
+            {/* Header */}
+            <div className="flex items-start justify-between pb-3 border-b border-slate-200/80">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-ink to-slate-700 flex items-center justify-center shadow-sm">
+                    <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
             </div>
-            <p className="text-sm text-graphite/70">
-              Your top 3 priority tasks. Select one to start a Pomodoro session. 25 minutes of focused work, then 5 minutes of rest.
-            </p>
-            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-              {todayTasks.length === 0 ? (
-                <p className="text-graphite/60 text-sm">No priority tasks available. Create a task to get started.</p>
-              ) : (
-                todayTasks.map((task) => (
+                  <div>
+                    <h2 className="text-xl font-bold text-ink tracking-tight">Today's Plan</h2>
+                    <p className="text-xs text-slate-500 mt-0.5 font-medium">
+                      Focus on completing non-routine tasks
+                    </p>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Date Selector */}
+              <div className="flex items-center gap-1.5 bg-white/80 backdrop-blur-sm rounded-lg p-1 border border-slate-200/60 shadow-sm">
                   <button
-                    key={task.id}
                     onClick={() => {
+                    const prevDate = new Date(selectedPlanDate)
+                    prevDate.setDate(prevDate.getDate() - 1)
+                    setSelectedPlanDate(prevDate)
+                  }}
+                  className="p-1.5 rounded-md hover:bg-slate-100 active:bg-slate-200 smooth-transition group"
+                  aria-label="Previous day"
+                >
+                  <svg className="w-3.5 h-3.5 text-slate-600 group-hover:text-ink smooth-transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                
+                <input
+                  type="date"
+                  value={`${selectedPlanDate.getFullYear()}-${String(selectedPlanDate.getMonth() + 1).padStart(2, '0')}-${String(selectedPlanDate.getDate()).padStart(2, '0')}`}
+                  onChange={(e) => {
+                    const newDate = new Date(e.target.value)
+                    newDate.setHours(0, 0, 0, 0)
+                    setSelectedPlanDate(newDate)
+                  }}
+                  className="px-2.5 py-1.5 rounded-md border-0 bg-transparent text-ink text-xs font-medium focus:outline-none focus:ring-1 focus:ring-ink/20 focus:bg-slate-50 smooth-transition min-w-[110px]"
+                />
+                
+                <button
+                  onClick={() => {
+                    const nextDate = new Date(selectedPlanDate)
+                    nextDate.setDate(nextDate.getDate() + 1)
+                    setSelectedPlanDate(nextDate)
+                  }}
+                  className="p-1.5 rounded-md hover:bg-slate-100 active:bg-slate-200 smooth-transition group"
+                  aria-label="Next day"
+                >
+                  <svg className="w-3.5 h-3.5 text-slate-600 group-hover:text-ink smooth-transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+                
+                <div className="w-px h-4 bg-slate-200 mx-0.5" />
+                
+                <button
+                  onClick={() => {
+                    const today = new Date()
+                    today.setHours(0, 0, 0, 0)
+                    setSelectedPlanDate(today)
+                  }}
+                  className="px-2.5 py-1.5 rounded-md bg-ink text-white text-xs font-semibold hover:bg-slate-800 active:bg-slate-900 smooth-transition shadow-sm hover:shadow"
+                >
+                  Today
+                </button>
+              </div>
+            </div>
+            
+            {/* Selected Date Display */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50/80 rounded-lg border border-slate-200/60">
+              <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span className="text-xs text-slate-600 font-medium">
+                {(() => {
+                  const today = new Date()
+                  today.setHours(0, 0, 0, 0)
+                  const selected = new Date(selectedPlanDate)
+                  selected.setHours(0, 0, 0, 0)
+                  const isToday = selected.getTime() === today.getTime()
+                  const isTomorrow = selected.getTime() === new Date(today.getTime() + 86400000).getTime()
+                  const isYesterday = selected.getTime() === new Date(today.getTime() - 86400000).getTime()
+                  
+                  let dateLabel: string
+                  if (isToday) {
+                    dateLabel = 'Today'
+                  } else if (isTomorrow) {
+                    dateLabel = 'Tomorrow'
+                  } else if (isYesterday) {
+                    dateLabel = 'Yesterday'
+                  } else {
+                    dateLabel = formatDate(selectedPlanDate)
+                  }
+                  
+                  return `Showing tasks for ${dateLabel}`
+                })()}
+              </span>
+            </div>
+
+            {/* Task List */}
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-1.5">
+                <div className="h-px flex-1 bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
+                <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2">Scheduled Tasks</h3>
+                <div className="h-px flex-1 bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
+              </div>
+              
+              {todaysNonRoutineTasks.length === 0 ? (
+                <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-xl bg-gradient-to-br from-slate-50/50 to-white">
+                  <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-slate-100 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                  </div>
+                  <p className="text-slate-600 text-xs font-medium">No tasks scheduled for this day</p>
+                  <p className="text-slate-400 text-[10px] mt-1">Schedule tasks in the Weekly Plan to see them here</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {todaysNonRoutineTasks.map((item) => {
+                    const startTime = new Date(item.startDate)
+                    const endTime = new Date(item.endDate)
+                    const formatTime = (date: Date) => {
+                      const hours = date.getHours()
+                      const minutes = date.getMinutes()
+                      const ampm = hours >= 12 ? 'PM' : 'AM'
+                      const displayHours = hours % 12 || 12
+                      const displayMinutes = minutes > 0 ? `:${String(minutes).padStart(2, '0')}` : ''
+                      return `${displayHours}${displayMinutes} ${ampm}`
+                    }
+                    const formatDuration = (hours: number): string => {
+                      if (hours === 0.5) return '30 min'
+                      if (hours === 1) return '1 hr'
+                      const wholeHours = Math.floor(hours)
+                      const minutes = Math.round((hours - wholeHours) * 60)
+                      if (wholeHours === 0) {
+                        return `${minutes} min`
+                      } else if (minutes === 0) {
+                        return `${wholeHours} ${wholeHours === 1 ? 'hr' : 'hrs'}`
+                      } else {
+                        return `${wholeHours} ${wholeHours === 1 ? 'hr' : 'hrs'} ${minutes} min`
+                      }
+                    }
+                    
+                    // Helper function to find or create a task for this scheduled item
+                    const handleTaskSelect = () => {
+                      // Try to find an existing task with the same name
+                      let task = tasks.find(t => t.title === item.name && t.status !== 'completed' && t.status !== 'cancelled')
+                      
+                      // If not found, create a new task
+                      if (!task) {
+                        task = addTask({
+                          title: item.name,
+                          description: `${item.projectName}${item.taskName ? ` - ${item.taskName}` : ''}`,
+                          priority: 'medium',
+                          status: 'todo',
+                          category: item.projectName,
+                        })
+                      }
+                      
+                      // Set as focus task and initialize pomodoro
                       setFocusTaskId(task.id)
                       setSecondsLeft(POMODORO_WORK_DURATION)
                       setIsRunning(false)
                       setIsRestPeriod(false)
                       setSessionStartTime(null)
-                    }}
-                    className={`w-full text-left px-4 py-3 rounded-2xl border smooth-transition ${
-                      focusTaskId === task.id
-                        ? "border-ink bg-ink text-white shadow-md"
-                        : "border-graphite/10 text-ink hover:border-graphite/40 hover:shadow-sm"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
+                    }
+                    
+                    // Find corresponding task to show pomodoro count and completion status
+                    const correspondingTask = tasks.find(t => t.title === item.name && t.status !== 'completed' && t.status !== 'cancelled')
+                    const pomodoroCount = correspondingTask ? ((correspondingTask as any).pomodorosCompleted || 0) : 0
+                    const isSelected = correspondingTask?.id === focusTaskId
+                    
+                    // Check if the Gantt task/subtask is completed and get actual time worked
+                    const project = projects.find(p => p.id === item.projectId)
+                    let isGanttTaskCompleted = false
+                    let actualTimeWorked = 0
+                    if (project) {
+                      if (item.type === 'task' && item.taskId) {
+                        const ganttTask = project.children?.find(t => t.id === item.taskId)
+                        isGanttTaskCompleted = ganttTask?.status === 'completed'
+                        // Get actual time worked from Gantt task or calculate from pomodoros
+                        actualTimeWorked = (ganttTask as any)?.actualTimeWorked || calculateTimeFromPomodoros((ganttTask as any)?.pomodorosCompleted || pomodoroCount)
+                      } else if (item.type === 'subtask' && item.taskId && item.subtaskId) {
+                        const ganttTask = project.children?.find(t => t.id === item.taskId)
+                        const ganttSubtask = ganttTask?.children?.find(s => s.id === item.subtaskId)
+                        isGanttTaskCompleted = ganttSubtask?.status === 'completed'
+                        // Get actual time worked from Gantt subtask or calculate from pomodoros
+                        actualTimeWorked = (ganttSubtask as any)?.actualTimeWorked || calculateTimeFromPomodoros((ganttSubtask as any)?.pomodorosCompleted || pomodoroCount)
+                      }
+                    } else {
+                      // Fallback: calculate from pomodoros if no Gantt task/subtask found
+                      actualTimeWorked = calculateTimeFromPomodoros(pomodoroCount)
+                    }
+                    const isTaskCompleted = isGanttTaskCompleted || (correspondingTask?.status === 'completed')
+                    
+                    // Handle checkbox toggle
+                    const handleCheckboxToggle = (e: React.MouseEvent) => {
+                      e.stopPropagation()
+                      
+                      // Get pomodoro count from corresponding task
+                      const pomodoroCountToSave = correspondingTask ? ((correspondingTask as any).pomodorosCompleted || 0) : 0
+                      const actualTimeToSave = calculateTimeFromPomodoros(pomodoroCountToSave)
+                      
+                      if (item.type === 'task' && item.taskId && updateGanttTask) {
+                        const updates: any = { status: isGanttTaskCompleted ? 'active' : 'completed' as GanttStatus }
+                        // Save pomodorosCompleted and actualTimeWorked when marking as completed
+                        if (!isGanttTaskCompleted && pomodoroCountToSave > 0) {
+                          updates.pomodorosCompleted = pomodoroCountToSave
+                          updates.actualTimeWorked = actualTimeToSave
+                        }
+                        updateGanttTask(item.projectId, item.taskId, updates)
+                      } else if (item.type === 'subtask' && item.taskId && item.subtaskId && updateGanttSubtask) {
+                        const updates: any = { status: isGanttTaskCompleted ? 'active' : 'completed' as GanttStatus }
+                        // Save pomodorosCompleted and actualTimeWorked when marking as completed
+                        if (!isGanttTaskCompleted && pomodoroCountToSave > 0) {
+                          updates.pomodorosCompleted = pomodoroCountToSave
+                          updates.actualTimeWorked = actualTimeToSave
+                        }
+                        updateGanttSubtask(item.projectId, item.taskId, item.subtaskId, updates as any)
+                      }
+                      
+                      // Also update corresponding regular task if it exists
+                      if (correspondingTask) {
+                        updateTask(correspondingTask.id, { status: isTaskCompleted ? 'todo' : 'completed' })
+                      }
+                    }
+                    
+                    return (
+                      <div
+                        key={item.id}
+                        className={`group relative w-full p-3 rounded-xl smooth-transition backdrop-blur-sm ${
+                          isSelected
+                            ? 'bg-blue-50 border-2 border-blue-400'
+                            : 'border border-slate-200/80 bg-white hover:border-slate-300 hover:shadow-md hover:shadow-slate-200/50'
+                        }`}
+                        style={{
+                          borderLeftWidth: isSelected ? '4px' : '3px',
+                          borderLeftColor: isSelected ? '#60a5fa' : item.projectColor,
+                          opacity: isTaskCompleted ? 0.6 : 1
+                        }}
+                      >
+                        <div className="flex items-start gap-3">
+                          {/* Checkbox */}
+                          <button
+                            onClick={handleCheckboxToggle}
+                            className="mt-0.5 flex-shrink-0 w-5 h-5 rounded border-2 border-slate-300 flex items-center justify-center hover:border-ink smooth-transition focus:outline-none focus:ring-2 focus:ring-ink/20"
+                            style={{
+                              backgroundColor: isTaskCompleted ? '#171c24' : 'white',
+                              borderColor: isTaskCompleted ? '#171c24' : undefined
+                            }}
+                          >
+                            {isTaskCompleted && (
+                              <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </button>
+                          
+                          {/* Task Content */}
+                          <button
+                            onClick={handleTaskSelect}
+                            className="flex-1 min-w-0 text-left cursor-pointer"
+                          >
+                        <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">{task.title}</p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <p className={`text-xs ${focusTaskId === task.id ? 'text-white/80' : 'text-cyan-500/60'}`}>
-                            {task.priority}
-                          </p>
-                          {task.timeSpent && task.timeSpent > 0 && (
-                            <p className={`text-xs ${focusTaskId === task.id ? 'text-white/70' : 'text-graphite/50'}`}>
-                              • {task.timeSpent} min
-                            </p>
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className={`font-semibold text-sm tracking-tight ${isSelected ? 'text-ink font-bold' : 'text-ink'} ${isTaskCompleted ? 'line-through text-slate-400' : ''}`}>{item.name}</h4>
+                              {isSelected && (
+                                <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-ink text-white font-semibold uppercase tracking-wide">
+                                  <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z" />
+                                  </svg>
+                                  Active
+                                </span>
+                              )}
+                              {item.type === 'subtask' && (
+                                <span className={`text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold uppercase tracking-wide border border-slate-200 ${isTaskCompleted ? 'line-through opacity-60' : ''}`}>
+                                  Subtask
+                                </span>
                           )}
                         </div>
+                            
+                            <div className={`flex items-center gap-3 mt-1.5 text-[10px] text-slate-500 ${isTaskCompleted ? 'line-through opacity-60' : ''}`}>
+                              <span className="flex items-center gap-1 font-medium">
+                                <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                <span className="text-slate-700">{formatTime(startTime)} - {formatTime(endTime)}</span>
+                              </span>
+                              <span className="flex items-center gap-1 font-medium">
+                                <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                <span className="text-slate-700">{formatDuration(item.durationHours)}</span>
+                              </span>
+                              {actualTimeWorked > 0 && (
+                                <span className="flex items-center gap-1 font-medium text-green-600">
+                                  <svg className="w-3 h-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  <span className="text-green-700 font-semibold">Worked: {formatTimeWorked(actualTimeWorked)}</span>
+                                </span>
+                              )}
                       </div>
-                      {task.status === 'in-progress' && (
-                        <div className="ml-2 w-2 h-2 rounded-full bg-green-500"></div>
-                      )}
+                            
+                            <div className={`flex items-center gap-1.5 mt-2 flex-wrap ${isTaskCompleted ? 'opacity-60' : ''}`}>
+                              <span
+                                className={`text-[9px] px-2 py-0.5 rounded-md font-bold text-white shadow-sm ${isTaskCompleted ? 'line-through' : ''}`}
+                                style={{ 
+                                  backgroundColor: item.projectColor,
+                                  boxShadow: `0 1px 2px ${item.projectColor}40`
+                                }}
+                              >
+                                {item.projectName}
+                              </span>
+                              {item.taskName && (
+                                <span
+                                  className={`text-[9px] px-2 py-0.5 rounded-md font-bold text-white shadow-sm ${isTaskCompleted ? 'line-through' : ''}`}
+                                  style={{ 
+                                    backgroundColor: item.taskColor || item.projectColor,
+                                    boxShadow: `0 1px 2px ${(item.taskColor || item.projectColor)}40`
+                                  }}
+                                >
+                                  {item.taskName}
+                                </span>
+                              )}
+                              {correspondingTask && (
+                                editingPomodoroTaskId === correspondingTask.id ? (
+                                  <div className="flex items-center gap-0.5 bg-white border-2 border-red-300 rounded-md shadow-sm">
+                                    <button
+                                      type="button"
+                                      onMouseDown={(e) => {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        const current = parseFloat(editingPomodoroValue) || 0
+                                        const newValue = Math.max(0, current - 0.5)
+                                        setEditingPomodoroValue(String(newValue))
+                                      }}
+                                      className="px-1 py-0.5 text-red-600 hover:bg-red-50 smooth-transition rounded-l-md"
+                                      aria-label="Decrease"
+                                    >
+                                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M20 12H4" />
+                                      </svg>
+                                    </button>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.5"
+                                      value={editingPomodoroValue}
+                                      onChange={(e) => setEditingPomodoroValue(e.target.value)}
+                                      onBlur={() => {
+                                        if (correspondingTask) {
+                                          const newCount = Math.max(0, parseFloat(editingPomodoroValue) || 0)
+                                          const actualTime = calculateTimeFromPomodoros(newCount)
+                                          updateTask(correspondingTask.id, { pomodorosCompleted: newCount } as any)
+                                          
+                                          // Also update Gantt subtask/task with pomodoro count and actual time worked
+                                          if (item.type === 'subtask' && item.taskId && item.subtaskId && updateGanttSubtask) {
+                                            updateGanttSubtask(item.projectId, item.taskId, item.subtaskId, { 
+                                              pomodorosCompleted: newCount,
+                                              actualTimeWorked: actualTime
+                                            } as any)
+                                          } else if (item.type === 'task' && item.taskId && updateGanttTask) {
+                                            updateGanttTask(item.projectId, item.taskId, { 
+                                              pomodorosCompleted: newCount,
+                                              actualTimeWorked: actualTime
+                                            } as any)
+                                          }
+                                          
+                                          setEditingPomodoroTaskId(null)
+                                        }
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          if (correspondingTask) {
+                                            const newCount = Math.max(0, parseFloat(editingPomodoroValue) || 0)
+                                            const actualTime = calculateTimeFromPomodoros(newCount)
+                                            updateTask(correspondingTask.id, { pomodorosCompleted: newCount } as any)
+                                            
+                                            // Also update Gantt subtask/task with pomodoro count and actual time worked
+                                            if (item.type === 'subtask' && item.taskId && item.subtaskId && updateGanttSubtask) {
+                                              updateGanttSubtask(item.projectId, item.taskId, item.subtaskId, { 
+                                                pomodorosCompleted: newCount,
+                                                actualTimeWorked: actualTime
+                                              } as any)
+                                            } else if (item.type === 'task' && item.taskId && updateGanttTask) {
+                                              updateGanttTask(item.projectId, item.taskId, { 
+                                                pomodorosCompleted: newCount,
+                                                actualTimeWorked: actualTime
+                                              } as any)
+                                            }
+                                            
+                                            setEditingPomodoroTaskId(null)
+                                          }
+                                        } else if (e.key === 'Escape') {
+                                          setEditingPomodoroTaskId(null)
+                                        }
+                                      }}
+                                      autoFocus
+                                      className="w-8 px-1 py-0.5 text-[9px] text-center text-ink font-bold border-0 bg-transparent focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onMouseDown={(e) => {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        const current = parseFloat(editingPomodoroValue) || 0
+                                        setEditingPomodoroValue(String(current + 0.5))
+                                      }}
+                                      className="px-1 py-0.5 text-red-600 hover:bg-red-50 smooth-transition rounded-r-md"
+                                      aria-label="Increase"
+                                    >
+                                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" />
+                                      </svg>
+                                    </button>
                     </div>
+                                ) : (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      if (correspondingTask) {
+                                        setEditingPomodoroTaskId(correspondingTask.id)
+                                        setEditingPomodoroValue(String(pomodoroCount))
+                                      }
+                                    }}
+                                    className={`group flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-md bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 smooth-transition ${isTaskCompleted ? 'line-through opacity-60' : ''}`}
+                                    title="Click to edit pomodoro count"
+                                  >
+                                    {pomodoroCount > 0 && Array.from({ length: pomodoroCount }).map((_, index) => (
+                                      <svg key={index} className="w-3.5 h-3.5 text-red-600" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M12 2C8.13 2 5 5.13 5 9c0 4.97 3.13 9 7 9s7-4.03 7-9c0-3.87-3.13-7-7-7z" fill="currentColor"/>
+                                        <path d="M10 2.5c0 .28.22.5.5.5h3c.28 0 .5-.22.5-.5s-.22-.5-.5-.5h-3c-.28 0-.5.22-.5.5z" fill="currentColor" opacity="0.4"/>
+                                        <path d="M11 1.5c0 .28.22.5.5.5h1c.28 0 .5-.22.5-.5s-.22-.5-.5-.5h-1c-.28 0-.5.22-.5.5z" fill="currentColor" opacity="0.3"/>
+                                        <ellipse cx="9.5" cy="11" rx="1.2" ry="1.8" fill="white" opacity="0.3"/>
+                                        <ellipse cx="14.5" cy="11" rx="1.2" ry="1.8" fill="white" opacity="0.3"/>
+                                      </svg>
+                                    ))}
+                                    {pomodoroCount === 0 && (
+                                      <span className="text-red-600 font-semibold">0</span>
+                                    )}
+                                    <svg className="w-2 h-2 opacity-0 group-hover:opacity-100 smooth-transition ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                    </svg>
                   </button>
-                ))
+                                )
               )}
             </div>
           </div>
-          <div className="panel p-6 flex flex-col items-center justify-center space-y-4">
+                    </div>
+                  </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Column - Pomodoro Timer */}
+          <div className="panel p-4 space-y-4 bg-gradient-to-br from-white via-slate-50/30 to-white border border-slate-200/60 shadow-lg shadow-slate-200/50">
+            <div className="flex items-center gap-2 pb-3 border-b border-slate-200/80">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-ink to-slate-700 flex items-center justify-center shadow-sm">
+                <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-bold text-ink tracking-tight">Pomodoro Timer</h2>
+            </div>
+            
+            <div className="bg-gradient-to-br from-slate-50/80 to-white rounded-xl p-4 border border-slate-200/60 shadow-sm">
             {activeFocusTask ? (
-              <>
+                    <div className="space-y-4">
                 <div className="text-center space-y-2">
-                  <p className="text-xs uppercase tracking-[0.3em] text-graphite/50">
+                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200">
+                    <div className={`w-1.5 h-1.5 rounded-full ${isRestPeriod ? 'bg-green-500' : 'bg-ink'} animate-pulse`} />
+                    <p className="text-[10px] uppercase tracking-wider font-bold text-slate-600">
                     {isRestPeriod ? "Rest Period" : "Focus Session"}
                   </p>
-                  <h4 className="text-xl text-ink font-semibold">{activeFocusTask.title}</h4>
+                  </div>
+                        <h4 className="text-base text-ink font-bold tracking-tight">{activeFocusTask.title}</h4>
+                  <div className="flex items-center justify-center gap-3 text-xs text-slate-500">
                   {activeFocusTask.timeSpent && activeFocusTask.timeSpent > 0 && (
-                    <p className="text-sm text-graphite/60">Total time: {activeFocusTask.timeSpent} minutes</p>
-                  )}
+                      <span className="font-medium">Time: {activeFocusTask.timeSpent} min</span>
+                    )}
+                    {activeFocusTask ? (
+                      editingPomodoroTaskId === activeFocusTask.id ? (
+                        <div className="flex items-center gap-1 justify-center">
+                          <div className="flex items-center gap-0.5 bg-white border-2 border-red-300 rounded-lg shadow-md px-1">
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                              }}
+                              onClick={() => {
+                                const current = parseInt(editingPomodoroValue) || 0
+                                const newValue = Math.max(0, current - 1)
+                                setEditingPomodoroValue(String(newValue))
+                              }}
+                              className="px-1.5 py-1 text-red-600 hover:bg-red-50 smooth-transition rounded-l-lg"
+                              aria-label="Decrease"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M20 12H4" />
+                              </svg>
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              value={editingPomodoroValue}
+                              onChange={(e) => setEditingPomodoroValue(e.target.value)}
+                              onBlur={() => {
+                                if (activeFocusTask) {
+                                  const newCount = Math.max(0, parseFloat(editingPomodoroValue) || 0)
+                                  const actualTime = calculateTimeFromPomodoros(newCount)
+                                  updateTask(activeFocusTask.id, { pomodorosCompleted: newCount } as any)
+                                  
+                                  // Also update Gantt subtask/task with pomodoro count and actual time worked
+                                  // Find the corresponding Gantt subtask/task by matching the task title
+                                  projects.forEach((project) => {
+                                    project.children?.forEach((ganttTask) => {
+                                      // Check if task name matches
+                                      if (ganttTask.name === activeFocusTask.title) {
+                                        updateGanttTask(project.id, ganttTask.id, { 
+                                          pomodorosCompleted: newCount,
+                                          actualTimeWorked: actualTime
+                                        } as any)
+                                      }
+                                      // Check subtasks
+                                      ganttTask.children?.forEach((ganttSubtask) => {
+                                        if (ganttSubtask.name === activeFocusTask.title) {
+                                          updateGanttSubtask(project.id, ganttTask.id, ganttSubtask.id, { 
+                                            pomodorosCompleted: newCount,
+                                            actualTimeWorked: actualTime
+                                          } as any)
+                                        }
+                                      })
+                                    })
+                                  })
+                                  
+                                  setEditingPomodoroTaskId(null)
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  if (activeFocusTask) {
+                                    const newCount = Math.max(0, parseFloat(editingPomodoroValue) || 0)
+                                    const actualTime = calculateTimeFromPomodoros(newCount)
+                                    updateTask(activeFocusTask.id, { pomodorosCompleted: newCount } as any)
+                                    
+                                    // Also update Gantt subtask/task with pomodoro count and actual time worked
+                                    // Find the corresponding Gantt subtask/task by matching the task title
+                                    projects.forEach((project) => {
+                                      project.children?.forEach((ganttTask) => {
+                                        // Check if task name matches
+                                        if (ganttTask.name === activeFocusTask.title) {
+                                          updateGanttTask(project.id, ganttTask.id, { 
+                                            pomodorosCompleted: newCount,
+                                            actualTimeWorked: actualTime
+                                          } as any)
+                                        }
+                                        // Check subtasks
+                                        ganttTask.children?.forEach((ganttSubtask) => {
+                                          if (ganttSubtask.name === activeFocusTask.title) {
+                                            updateGanttSubtask(project.id, ganttTask.id, ganttSubtask.id, { 
+                                              pomodorosCompleted: newCount,
+                                              actualTimeWorked: actualTime
+                                            } as any)
+                                          }
+                                        })
+                                      })
+                                    })
+                                    
+                                    setEditingPomodoroTaskId(null)
+                                  }
+                                } else if (e.key === 'Escape') {
+                                  setEditingPomodoroTaskId(null)
+                                }
+                              }}
+                              autoFocus
+                              className="w-12 px-2 py-1 text-xs text-center text-ink font-bold border-0 bg-transparent focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                              }}
+                              onClick={() => {
+                                const current = parseFloat(editingPomodoroValue) || 0
+                                setEditingPomodoroValue(String(current + 0.5))
+                              }}
+                              className="px-1.5 py-1 text-red-600 hover:bg-red-50 smooth-transition rounded-r-lg"
+                              aria-label="Increase"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" />
+                              </svg>
+                            </button>
                 </div>
-                <div className="relative w-48 h-48">
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            if (activeFocusTask) {
+                              setEditingPomodoroTaskId(activeFocusTask.id)
+                              setEditingPomodoroValue(String((activeFocusTask as any).pomodorosCompleted || 0))
+                            }
+                          }}
+                          className="group flex items-center gap-1 font-medium hover:opacity-80 smooth-transition px-2 py-1 rounded-lg hover:bg-red-50"
+                          title="Click to edit pomodoro count"
+                        >
+                          {(activeFocusTask as any).pomodorosCompleted && (activeFocusTask as any).pomodorosCompleted > 0 ? (
+                            Array.from({ length: (activeFocusTask as any).pomodorosCompleted }).map((_, index) => (
+                              <svg key={index} className="w-4 h-4 text-red-600" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M12 2C8.13 2 5 5.13 5 9c0 4.97 3.13 9 7 9s7-4.03 7-9c0-3.87-3.13-7-7-7z" fill="currentColor"/>
+                                <path d="M10 2.5c0 .28.22.5.5.5h3c.28 0 .5-.22.5-.5s-.22-.5-.5-.5h-3c-.28 0-.5.22-.5.5z" fill="currentColor" opacity="0.4"/>
+                                <path d="M11 1.5c0 .28.22.5.5.5h1c.28 0 .5-.22.5-.5s-.22-.5-.5-.5h-1c-.28 0-.5.22-.5.5z" fill="currentColor" opacity="0.3"/>
+                                <ellipse cx="9.5" cy="11" rx="1.2" ry="1.8" fill="white" opacity="0.3"/>
+                                <ellipse cx="14.5" cy="11" rx="1.2" ry="1.8" fill="white" opacity="0.3"/>
+                              </svg>
+                            ))
+                          ) : (
+                            <span className="text-red-600 font-semibold">0</span>
+                          )}
+                          <svg className="w-3 h-3 opacity-0 group-hover:opacity-100 smooth-transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                      )
+                    ) : null}
+                </div>
+                </div>
+                      <div 
+                        ref={timerCircleRef}
+                        className="relative w-36 h-36 mx-auto cursor-pointer select-none"
+                        onMouseDown={(e) => {
+                          if (!timerCircleRef.current) return
+                          setIsDraggingTimer(true)
+                          const wasRunning = isRunning
+                          if (wasRunning) setIsRunning(false)
+                          
+                          const handleMouseMove = (moveEvent: MouseEvent) => {
+                            if (!timerCircleRef.current) return
+                            const rect = timerCircleRef.current.getBoundingClientRect()
+                            const centerX = rect.left + rect.width / 2
+                            const centerY = rect.top + rect.height / 2
+                            
+                            const x = moveEvent.clientX - centerX
+                            const y = moveEvent.clientY - centerY
+                            
+                            // Calculate angle from center (in radians)
+                            // Atan2 gives angle from positive x-axis, we want from top (negative y)
+                            let angle = Math.atan2(y, x)
+                            // Convert to 0-2π range starting from top
+                            angle = (angle + Math.PI / 2 + 2 * Math.PI) % (2 * Math.PI)
+                            
+                            // Convert angle to progress (0-1)
+                            const progress = angle / (2 * Math.PI)
+                            
+                            // Convert progress to seconds
+                            const currentDuration = isRestPeriod ? POMODORO_REST_DURATION : POMODORO_WORK_DURATION
+                            const newSecondsLeft = Math.max(0, Math.min(currentDuration, Math.round(currentDuration * (1 - progress))))
+                            
+                            setSecondsLeft(newSecondsLeft)
+                            setSessionStartTime(null)
+                          }
+                          
+                          const handleMouseUp = () => {
+                            setIsDraggingTimer(false)
+                            document.removeEventListener('mousemove', handleMouseMove)
+                            document.removeEventListener('mouseup', handleMouseUp)
+                          }
+                          
+                          document.addEventListener('mousemove', handleMouseMove)
+                          document.addEventListener('mouseup', handleMouseUp)
+                          
+                          // Initial calculation
+                          handleMouseMove(e.nativeEvent)
+                        }}
+                        onTouchStart={(e) => {
+                          if (!timerCircleRef.current || !e.touches[0]) return
+                          e.preventDefault()
+                          setIsDraggingTimer(true)
+                          const wasRunning = isRunning
+                          if (wasRunning) setIsRunning(false)
+                          
+                          const rect = timerCircleRef.current.getBoundingClientRect()
+                          const centerX = rect.left + rect.width / 2
+                          const centerY = rect.top + rect.height / 2
+                          
+                          const handleTouchMove = (moveEvent: TouchEvent) => {
+                            if (!timerCircleRef.current || !moveEvent.touches[0]) return
+                            moveEvent.preventDefault()
+                            const rect = timerCircleRef.current.getBoundingClientRect()
+                            const centerX = rect.left + rect.width / 2
+                            const centerY = rect.top + rect.height / 2
+                            
+                            const touch = moveEvent.touches[0]
+                            const x = touch.clientX - centerX
+                            const y = touch.clientY - centerY
+                            
+                            let angle = Math.atan2(y, x)
+                            angle = (angle + Math.PI / 2 + 2 * Math.PI) % (2 * Math.PI)
+                            
+                            const progress = angle / (2 * Math.PI)
+                            const currentDuration = isRestPeriod ? POMODORO_REST_DURATION : POMODORO_WORK_DURATION
+                            const newSecondsLeft = Math.max(0, Math.min(currentDuration, Math.round(currentDuration * (1 - progress))))
+                            
+                            setSecondsLeft(newSecondsLeft)
+                            setSessionStartTime(null)
+                          }
+                          
+                          const handleTouchEnd = () => {
+                            setIsDraggingTimer(false)
+                            document.removeEventListener('touchmove', handleTouchMove)
+                            document.removeEventListener('touchend', handleTouchEnd)
+                          }
+                          
+                          document.addEventListener('touchmove', handleTouchMove, { passive: false })
+                          document.addEventListener('touchend', handleTouchEnd)
+                          
+                          // Initial calculation
+                          const touch = e.touches[0]
+                          const x = touch.clientX - centerX
+                          const y = touch.clientY - centerY
+                          let angle = Math.atan2(y, x)
+                          angle = (angle + Math.PI / 2 + 2 * Math.PI) % (2 * Math.PI)
+                          const progress = angle / (2 * Math.PI)
+                          const currentDuration = isRestPeriod ? POMODORO_REST_DURATION : POMODORO_WORK_DURATION
+                          const newSecondsLeft = Math.max(0, Math.min(currentDuration, Math.round(currentDuration * (1 - progress))))
+                          setSecondsLeft(newSecondsLeft)
+                          setSessionStartTime(null)
+                        }}
+                      >
                   <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
-                    <circle cx="50" cy="50" r="45" stroke="rgba(23,28,36,0.1)" strokeWidth="5" fill="transparent" />
+                    <circle cx="50" cy="50" r="45" stroke="rgba(23,28,36,0.08)" strokeWidth="6" fill="transparent" />
                     <circle
                       cx="50"
                       cy="50"
                       r="45"
                       stroke={isRestPeriod ? "#10b981" : "#171c24"}
-                      strokeWidth="4"
+                      strokeWidth="5"
                       strokeDasharray={`${Math.min(283, (progressPercent / 100) * 283)} 283`}
                       strokeLinecap="round"
                       fill="transparent"
+                      className={isDraggingTimer ? "" : "smooth-transition"}
                     />
                   </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <p className={`text-3xl font-semibold ${isRestPeriod ? 'text-green-600' : 'text-ink'}`}>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                          <p className={`text-2xl font-bold ${isRestPeriod ? 'text-green-600' : 'text-ink'} tracking-tight`}>
                       {formatSeconds(secondsLeft)}
                     </p>
-                    <p className="text-xs text-graphite/60">
+                    <p className="text-[10px] text-slate-500 font-medium mt-0.5 uppercase tracking-wide">
                       {isRestPeriod ? "Rest time" : "Work time"}
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3 flex-wrap justify-center">
+                      <div className="flex gap-2 flex-wrap justify-center">
                   <button
                     onClick={() => setIsRunning((prev) => !prev)}
-                    className={`px-5 py-2 rounded-full border uppercase tracking-[0.3em] smooth-transition ${
+                          className={`px-3 py-1.5 rounded-lg border-2 uppercase tracking-wider text-[10px] font-bold smooth-transition shadow-sm hover:shadow ${
                       isRestPeriod
-                        ? "border-green-500 text-green-600 hover:bg-green-50"
-                        : "border-ink text-ink hover:bg-ink/5"
+                        ? "border-green-500 text-green-600 hover:bg-green-50 bg-white"
+                        : "border-ink text-ink hover:bg-ink hover:text-white bg-white"
                     }`}
                   >
                     {isRunning ? "Pause" : "Start"}
@@ -4960,29 +5773,25 @@ export default function TaskManager() {
                       setIsRunning(false)
                       setSessionStartTime(null)
                     }}
-                    className="px-5 py-2 rounded-full border border-graphite/20 text-graphite uppercase tracking-[0.3em] hover:bg-graphite/5 smooth-transition"
+                          className="px-3 py-1.5 rounded-lg border-2 border-slate-300 text-slate-600 uppercase tracking-wider text-[10px] font-bold hover:bg-slate-50 hover:border-slate-400 smooth-transition shadow-sm hover:shadow bg-white"
                   >
                     Reset
                   </button>
                   {!isRestPeriod && (
                     <button
                       onClick={() => {
-                        // Save current progress to log
                         if (!focusTaskId) return
-                        
                         const task = tasks.find(t => t.id === focusTaskId)
                         if (!task) return
                         
                         const endTime = Date.now()
                         const workDuration = POMODORO_WORK_DURATION
-                        const elapsed = workDuration - secondsLeft // seconds elapsed
+                              const elapsed = workDuration - secondsLeft
                         
-                        // Calculate time spent in minutes (minimum 1 minute if any time has passed)
                         let timeSpent = 0
                         if (elapsed > 0) {
-                          timeSpent = Math.max(1, Math.floor(elapsed / 60)) // at least 1 minute if any time passed
+                                timeSpent = Math.max(1, Math.floor(elapsed / 60))
                         } else if (sessionStartTime !== null) {
-                          // Fallback to session start time if timer hasn't moved
                           timeSpent = Math.max(1, Math.floor((endTime - sessionStartTime) / 1000 / 60))
                         }
                         
@@ -4997,24 +5806,27 @@ export default function TaskManager() {
                             type: 'work' as const,
                           }
                           const timeLog = task.timeLog || []
+                          // Increment pomodoro count if at least 20 minutes were spent (80% of a pomodoro)
+                          const pomodorosCompleted = (task as any).pomodorosCompleted || 0
+                          const shouldIncrementPomodoro = timeSpent >= 20
                           updateTask(focusTaskId, { 
                             timeSpent: currentTime + timeSpent,
-                            timeLog: [...timeLog, timeEntry]
-                          })
-                          // Reset session start time and timer
+                            timeLog: [...timeLog, timeEntry],
+                            pomodorosCompleted: shouldIncrementPomodoro ? pomodorosCompleted + 1 : pomodorosCompleted
+                          } as any)
                           setSessionStartTime(Date.now())
                           setSecondsLeft(POMODORO_WORK_DURATION)
                           setIsRunning(false)
                         }
                       }}
                       disabled={secondsLeft === POMODORO_WORK_DURATION && sessionStartTime === null}
-                      className={`px-5 py-2 rounded-full border uppercase tracking-[0.3em] smooth-transition ${
+                            className={`px-3 py-1.5 rounded-lg border-2 uppercase tracking-wider text-[10px] font-bold smooth-transition shadow-sm hover:shadow ${
                         secondsLeft === POMODORO_WORK_DURATION && sessionStartTime === null
-                          ? "border-graphite/20 text-graphite/40 cursor-not-allowed"
-                          : "border-blue-500/60 text-blue-600 hover:bg-blue-50"
+                          ? "border-slate-200 text-slate-400 cursor-not-allowed bg-slate-50"
+                          : "border-blue-500 text-blue-600 hover:bg-blue-50 bg-white"
                       }`}
                     >
-                      Save Progress
+                            Save
                     </button>
                   )}
                   {!isRestPeriod && (
@@ -5025,95 +5837,46 @@ export default function TaskManager() {
                       setIsRunning(false)
                         setSessionStartTime(null)
                     }}
-                      className="px-5 py-2 rounded-full border border-amber/60 text-amber uppercase tracking-[0.3em] hover:bg-amber/5 smooth-transition"
+                            className="px-3 py-1.5 rounded-lg border-2 border-amber-500 text-amber-600 uppercase tracking-wider text-[10px] font-bold hover:bg-amber-50 smooth-transition shadow-sm hover:shadow bg-white"
                   >
                     Complete
                   </button>
                   )}
                 </div>
-              </>
-            ) : (
-              <div className="text-center space-y-2">
-                <p className="text-lg text-ink">Select a task to focus.</p>
-                <p className="text-sm text-graphite/60">Start a 25-minute work session, then take a 5-minute break.</p>
               </div>
-            )}
-          </div>
-
-          {/* Time Log */}
-          {activeFocusTask && (
-            <div className="panel p-6">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-8 h-8 rounded-full bg-ink/10 text-ink flex items-center justify-center">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <h3 className="text-lg text-ink font-semibold">Time Log</h3>
-              </div>
-              {activeFocusTask.timeLog && activeFocusTask.timeLog.length > 0 ? (
-                <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-                  {activeFocusTask.timeLog
-                    .slice()
-                    .reverse()
-                    .map((entry) => {
-                      const startDate = new Date(entry.startTime)
-                      const endDate = new Date(entry.endTime)
-                      const dateStr = startDate.toLocaleDateString("en-US", { 
-                        month: "short", 
-                        day: "numeric",
-                        year: startDate.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined
-                      })
-                      const timeStr = startDate.toLocaleTimeString("en-US", { 
-                        hour: "numeric", 
-                        minute: "2-digit",
-                        hour12: true 
-                      })
-                      
-                      return (
-                        <div
-                          key={entry.id}
-                          className="p-3 rounded-xl border border-slate-200/60 bg-white/50 hover:bg-white hover:shadow-sm smooth-transition"
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="flex items-center gap-2">
-                              <div className={`w-2 h-2 rounded-full ${
-                                entry.type === 'work' ? 'bg-blue-500' : 'bg-green-500'
-                              }`}></div>
-                              <span className="text-sm font-semibold text-ink">
-                                {entry.duration} min
-                              </span>
-                              <span className="text-xs text-graphite/60 capitalize">
-                                {entry.type}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="text-xs text-graphite/50 mt-1">
-                            {dateStr} at {timeStr}
-                          </div>
-                        </div>
-                      )
-                    })}
-                </div>
               ) : (
-                <div className="text-center py-8 text-graphite/50">
-                  <svg className="w-12 h-12 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="text-center space-y-3 py-6">
+                      <div className="w-12 h-12 mx-auto rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
+                        <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <p className="text-sm">No time logged yet</p>
-                  <p className="text-xs mt-1">Start a focus session to begin tracking time</p>
                 </div>
+                      <div>
+                        <p className="text-xs text-slate-600 font-semibold">Start a focus session</p>
+                        <p className="text-[10px] text-slate-400 mt-1">Select a task from your list to begin a 25-minute work session</p>
+              </div>
+                            </div>
               )}
-              {activeFocusTask.timeSpent && activeFocusTask.timeSpent > 0 && (
-                <div className="mt-4 pt-4 border-t border-slate-200/60">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-graphite/70">Total Time</span>
-                    <span className="text-lg font-bold text-ink">{activeFocusTask.timeSpent} minutes</span>
+                          </div>
+            
+            {/* Notes Section */}
+            <div className="border-t border-slate-200/80 pt-3">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-md bg-gradient-to-br from-ink/10 to-slate-700/10 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-ink" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </div>
+                <h3 className="text-xs font-bold text-ink uppercase tracking-wider">Notes</h3>
                   </div>
+              <textarea
+                value={todayNotes}
+                onChange={(e) => setTodayNotes(e.target.value)}
+                placeholder="Add thoughts, comments, or progress notes for today..."
+                className="w-full min-h-[100px] px-3 py-2.5 rounded-xl border-2 border-slate-200 bg-white text-ink placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-ink/20 focus:border-ink/40 smooth-transition resize-none shadow-sm hover:shadow font-medium text-xs leading-relaxed"
+              />
                 </div>
-              )}
             </div>
-          )}
         </section>
       )}
 

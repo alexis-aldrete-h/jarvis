@@ -78,6 +78,8 @@ export const loadProjectsFromSupabase = async (): Promise<GanttProject[]> => {
               difficulty: st.difficulty || undefined,
               status: st.status || undefined,
               verified: st.verified || false,
+              pomodorosCompleted: st.pomodoros_completed || 0,
+              actualTimeWorked: st.actual_time_worked || undefined,
             }))
 
           return {
@@ -93,6 +95,8 @@ export const loadProjectsFromSupabase = async (): Promise<GanttProject[]> => {
             totalPoints: t.total_points || undefined,
             status: t.status || undefined,
             verified: t.verified || false,
+            pomodorosCompleted: t.pomodoros_completed || 0,
+            actualTimeWorked: t.actual_time_worked || undefined,
             children: taskSubtasks,
           } as GanttTask
         })
@@ -281,6 +285,8 @@ export const saveProjectsToSupabase = async (projects: GanttProject[]): Promise<
           status: t.status || 'backlog',
           verified: t.verified || false,
           order: taskIndex,
+          pomodoros_completed: t.pomodorosCompleted || 0,
+          actual_time_worked: t.actualTimeWorked || null,
         })
       })
     })
@@ -321,6 +327,8 @@ export const saveProjectsToSupabase = async (projects: GanttProject[]): Promise<
             status: st.status || 'backlog',
             verified: st.verified || false,
             order: subtaskIndex,
+            pomodoros_completed: st.pomodorosCompleted || 0,
+            actual_time_worked: st.actualTimeWorked || null,
           })
         })
       })

@@ -17,6 +17,8 @@ export interface GanttSubtask {
   difficulty?: number;
   status?: GanttStatus;
   verified?: boolean;
+  pomodorosCompleted?: number;
+  actualTimeWorked?: number; // in minutes
 }
 
 export interface GanttTask {
@@ -32,6 +34,8 @@ export interface GanttTask {
   children: GanttSubtask[];
   status?: GanttStatus;
   verified?: boolean;
+  pomodorosCompleted?: number;
+  actualTimeWorked?: number; // in minutes
 }
 
 export interface GanttProject {

@@ -32,6 +32,117 @@ const priorityColors: Record<TaskPriority, string> = {
   urgent: 'bg-red-100 text-red-800 border-red-500',
 }
 
+const POMODORO_DURATION_MINUTES = 30 // Each pomodoro represents 30 minutes of actual work
+
+// Helper function to calculate actual time worked from pomodoros (in minutes)
+const calculateTimeFromPomodoros = (pomodoros: number | undefined): number => {
+  if (!pomodoros || pomodoros === 0) return 0
+  return pomodoros * POMODORO_DURATION_MINUTES
+}
+
+// Helper function to format time in minutes to readable format (e.g., "1 hr 45 min")
+const formatTimeWorked = (minutes: number): string => {
+  if (minutes === 0) return '0 min'
+  const hours = Math.floor(minutes / 60)
+  const mins = Math.round(minutes % 60)
+  if (hours === 0) return `${mins} min`
+  if (mins === 0) return `${hours} hr${hours !== 1 ? 's' : ''}`
+  return `${hours} hr${hours !== 1 ? 's' : ''} ${mins} min`
+}
+
+// Helper function to get actual time worked for a row
+const getActualTimeWorked = (tableRow: TableRow, projects: GanttProject[]): number | null => {
+  if (!tableRow.data) return null
+
+  if (tableRow.type === 'subtask') {
+    const subtask = tableRow.data as GanttSubtask
+    // Get actual time worked from subtask or calculate from pomodoros
+    const actualTime = (subtask as any).actualTimeWorked
+    if (actualTime !== undefined && actualTime !== null) {
+      return actualTime
+    }
+    // Fallback to calculating from pomodoros
+    const pomodoros = (subtask as any).pomodorosCompleted
+    if (pomodoros !== undefined && pomodoros !== null && pomodoros > 0) {
+      return calculateTimeFromPomodoros(pomodoros)
+    }
+    return null
+  } else if (tableRow.type === 'task') {
+    const task = tableRow.data as GanttTask
+    // Get actual time worked from task or calculate from pomodoros
+    const actualTime = (task as any).actualTimeWorked
+    if (actualTime !== undefined && actualTime !== null) {
+      return actualTime
+    }
+    // Fallback to calculating from pomodoros
+    const pomodoros = (task as any).pomodorosCompleted
+    if (pomodoros !== undefined && pomodoros !== null && pomodoros > 0) {
+      return calculateTimeFromPomodoros(pomodoros)
+    }
+    // If no direct time, sum up from subtasks
+    const project = projects.find(p => p.id === tableRow.projectId)
+    const ganttTask = project?.children.find(t => t.id === tableRow.id)
+    if (ganttTask?.children) {
+      let totalTime = 0
+      let hasTime = false
+      ganttTask.children.forEach(subtask => {
+        const subtaskTime = (subtask as any).actualTimeWorked
+        if (subtaskTime !== undefined && subtaskTime !== null) {
+          totalTime += subtaskTime
+          hasTime = true
+        } else {
+          const subtaskPomodoros = (subtask as any).pomodorosCompleted
+          if (subtaskPomodoros !== undefined && subtaskPomodoros !== null && subtaskPomodoros > 0) {
+            totalTime += calculateTimeFromPomodoros(subtaskPomodoros)
+            hasTime = true
+          }
+        }
+      })
+      return hasTime ? totalTime : null
+    }
+    return null
+  } else if (tableRow.type === 'project') {
+    const project = tableRow.data as GanttProject
+    // Sum up time from all tasks and subtasks
+    let totalTime = 0
+    let hasTime = false
+    
+    project.children?.forEach(task => {
+      // Check task's own time
+      const taskTime = (task as any).actualTimeWorked
+      if (taskTime !== undefined && taskTime !== null) {
+        totalTime += taskTime
+        hasTime = true
+      } else {
+        const taskPomodoros = (task as any).pomodorosCompleted
+        if (taskPomodoros !== undefined && taskPomodoros !== null && taskPomodoros > 0) {
+          totalTime += calculateTimeFromPomodoros(taskPomodoros)
+          hasTime = true
+        }
+      }
+      
+      // Check subtasks
+      task.children?.forEach(subtask => {
+        const subtaskTime = (subtask as any).actualTimeWorked
+        if (subtaskTime !== undefined && subtaskTime !== null) {
+          totalTime += subtaskTime
+          hasTime = true
+        } else {
+          const subtaskPomodoros = (subtask as any).pomodorosCompleted
+          if (subtaskPomodoros !== undefined && subtaskPomodoros !== null && subtaskPomodoros > 0) {
+            totalTime += calculateTimeFromPomodoros(subtaskPomodoros)
+            hasTime = true
+          }
+        }
+      })
+    })
+    
+    return hasTime ? totalTime : null
+  }
+  
+  return null
+}
+
 const CATEGORY_OPTIONS = [
   'Personal',
   'Wife',
@@ -3089,7 +3200,13 @@ const DatePicker = ({
 
                       {/* Time Spent */}
                       <td className={`px-2 py-1 text-xs text-slate-700 border border-slate-300 ${tableRow.type === 'project' ? 'font-bold' : tableRow.type === 'task' ? 'font-bold' : ''}`}>
-                        -
+                        {(() => {
+                          const actualTime = getActualTimeWorked(tableRow, projects)
+                          if (actualTime !== null && actualTime > 0) {
+                            return formatTimeWorked(actualTime)
+                          }
+                          return <span className="text-slate-400 italic">Unknown</span>
+                        })()}
                       </td>
                     </tr>
                     
