@@ -10,6 +10,7 @@ import { GanttProject, GanttTask, GanttSubtask, GanttStatus } from "@jarvis/shar
 import ProjectPlanner from "./ProjectPlanner"
 import Projects2Page from "./Projects2Page"
 import GanttV2Page from "./GanttV2Page"
+import TasksDashboard from "./TasksDashboard"
 // import ProjectsView from "./ProjectsView"
 
 const POMODORO_WORK_DURATION = 25 * 60 // 25 minutes in seconds
@@ -1072,7 +1073,7 @@ const getDateDaysFromToday = (days: number): string => {
 export default function TaskManager() {
   const { tasks, addTask, updateTask, deleteTask, toggleTaskStatus, toggleSubtask, addSubtask, deleteSubtask } = useTasks()
   const { projects, addProject, updateProject, deleteProject, addTask: addGanttTask, updateTask: updateGanttTask, deleteTask: deleteGanttTask, addSubtask: addGanttSubtask, updateSubtask: updateGanttSubtask, deleteSubtask: deleteGanttSubtask } = useGanttContext()
-  const [view, setView] = useState<"board" | "weeklyplan" | "focus" | "projects2" | "ganttv2">("board")
+  const [view, setView] = useState<"dashboard" | "board" | "weeklyplan" | "focus" | "projects2" | "ganttv2">("dashboard")
   // Track individual subtask column assignments (subtaskId -> column status)
   const [subtaskColumnAssignments, setSubtaskColumnAssignments] = useState<Map<string, TaskStatus | "sprint" | "today" | "routine">>(new Map())
   // Track which subtasks we've already processed for auto-assignment
@@ -2312,6 +2313,16 @@ export default function TaskManager() {
             {/* Navigation Tabs */}
             <div className="flex items-center gap-0.5 border-t border-slate-200 bg-slate-50/30 px-2">
               {([
+                { 
+                  id: "dashboard", 
+                  label: "Dashboard", 
+                  description: "Overview and metrics",
+                  icon: (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                  )
+                },
                 { 
                   id: "projects2", 
                   label: "Projects Table", 
@@ -5880,6 +5891,16 @@ export default function TaskManager() {
         </section>
       )}
 
+      {view === "dashboard" && (
+        <TasksDashboard
+          tasks={tasks}
+          projects={projects}
+          onNavigateToView={setView}
+          updateTask={updateTask}
+          updateGanttTask={updateGanttTask}
+        />
+      )}
+
       {view === "projects2" && (
         <div className="h-full -mx-6 -my-8">
           <Projects2Page />
@@ -6092,16 +6113,42 @@ function TaskColumn({
         const taskId = data
         const task = tasks.find(t => t.id === taskId)
         if (task) {
+          // Check if task is currently in sprint (has sprint category or tag)
+          const isInSprint = task.category?.toLowerCase() === "sprint" || task.tags?.some(tag => tag.toLowerCase() === "sprint")
+          
           if (column.status === "sprint") {
             // For sprint column, set category to "sprint" and keep current status
             updateTask(taskId, { category: "sprint" })
           } else if (column.status === "today") {
-            // For today column, set dueDate to today and keep current status
+            // For today column, set dueDate to today and remove sprint category if present
             const today = new Date().toISOString().split('T')[0]
-            updateTask(taskId, { dueDate: today })
-          } else if (task.status !== column.status) {
-            // For regular status columns, update status
-            updateTask(taskId, { status: column.status as TaskStatus })
+            const updates: Partial<Task> = { dueDate: today }
+            if (isInSprint) {
+              // Remove sprint category when moving to today
+              if (task.category === "sprint") {
+                updates.category = undefined
+              }
+              // Also remove sprint tag if present
+              if (task.tags?.some(tag => tag.toLowerCase() === "sprint")) {
+                updates.tags = task.tags.filter(tag => tag.toLowerCase() !== "sprint")
+              }
+            }
+            updateTask(taskId, updates)
+          } else {
+            // For regular status columns (todo, in-progress, completed, cancelled)
+            const updates: Partial<Task> = { status: column.status as TaskStatus }
+            // Remove sprint category/tag when moving away from sprint
+            if (isInSprint) {
+              // Remove sprint category if it's the only category, otherwise keep other categories
+              if (task.category === "sprint") {
+                updates.category = undefined
+              }
+              // Also remove sprint tag if present
+              if (task.tags?.some(tag => tag.toLowerCase() === "sprint")) {
+                updates.tags = task.tags.filter(tag => tag.toLowerCase() !== "sprint")
+              }
+            }
+            updateTask(taskId, updates)
           }
         }
       }

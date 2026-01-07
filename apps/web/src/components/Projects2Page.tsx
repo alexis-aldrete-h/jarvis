@@ -1,9 +1,8 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useGanttContext } from '@/contexts/GanttContext'
 import { GanttProject, GanttTask, GanttSubtask, GanttStatus, TaskPriority, StoryPoint } from '@jarvis/shared'
-import '@/hooks/testSupabase' // Import to make test function available
 
 type TableRow = {
   id: string
@@ -170,6 +169,41 @@ const categoryColors: Record<string, string> = {
   'Relations': 'bg-pink-100 text-pink-800 border-pink-400',
   'Chores': 'bg-slate-100 text-slate-800 border-slate-400',
 }
+
+// Project background colors - light, subtle colors for visual grouping
+// All colors are unique to ensure each project gets a distinct color
+const PROJECT_BACKGROUND_COLORS = [
+  { bg: '#f9fafb', hover: '#f3f4f6', border: '#e5e7eb' }, // 0: slate
+  { bg: '#f0f9ff', hover: '#e0f2fe', border: '#bae6fd' }, // 1: sky
+  { bg: '#f5f3ff', hover: '#ede9fe', border: '#ddd6fe' }, // 2: violet
+  { bg: '#fef3c7', hover: '#fde68a', border: '#fcd34d' }, // 3: amber
+  { bg: '#ecfdf5', hover: '#d1fae5', border: '#a7f3d0' }, // 4: emerald
+  { bg: '#fef2f2', hover: '#fee2e2', border: '#fecaca' }, // 5: red
+  { bg: '#f0fdf4', hover: '#dcfce7', border: '#bbf7d0' }, // 6: green
+  { bg: '#fdf4ff', hover: '#fae8ff', border: '#f5d0fe' }, // 7: fuchsia
+  { bg: '#eff6ff', hover: '#dbeafe', border: '#bfdbfe' }, // 8: blue
+  { bg: '#fff7ed', hover: '#ffedd5', border: '#fed7aa' }, // 9: orange
+  { bg: '#faf5ff', hover: '#f3e8ff', border: '#e9d5ff' }, // 10: purple
+  { bg: '#f0fdfa', hover: '#ccfbf1', border: '#99f6e4' }, // 11: teal
+  { bg: '#fefce8', hover: '#fef9c3', border: '#fde047' }, // 12: yellow
+  { bg: '#fdf2f8', hover: '#fce7f3', border: '#fbcfe8' }, // 13: pink
+  { bg: '#f4f4f5', hover: '#e4e4e7', border: '#d4d4d8' }, // 14: zinc
+  { bg: '#ecfeff', hover: '#cffafe', border: '#a5f3fc' }, // 15: cyan
+  { bg: '#f7fee7', hover: '#ecfccb', border: '#d9f99d' }, // 16: lime
+  { bg: '#fff1f2', hover: '#ffe4e6', border: '#fecdd3' }, // 17: rose
+  { bg: '#fafafa', hover: '#f4f4f5', border: '#e4e4e7' }, // 18: neutral
+  { bg: '#f8fafc', hover: '#f1f5f9', border: '#cbd5e1' }, // 19: slate-light
+  { bg: '#fffbeb', hover: '#fef3c7', border: '#fde68a' }, // 20: amber-light
+  { bg: '#e0e7ff', hover: '#c7d2fe', border: '#a5b4fc' }, // 21: indigo
+  { bg: '#fefce8', hover: '#fef9c3', border: '#facc15' }, // 22: yellow-dark
+  { bg: '#f0fdfa', hover: '#ccfbf1', border: '#5eead4' }, // 23: teal-bright
+  { bg: '#fef2f2', hover: '#fee2e2', border: '#f87171' }, // 24: red-bright
+  { bg: '#f0fdf4', hover: '#dcfce7', border: '#4ade80' }, // 25: green-bright
+  { bg: '#fdf4ff', hover: '#fae8ff', border: '#e879f9' }, // 26: fuchsia-bright
+  { bg: '#e0e7ff', hover: '#c7d2fe', border: '#818cf8' }, // 27: indigo-bright
+  { bg: '#fef3c7', hover: '#fde68a', border: '#fbbf24' }, // 28: amber-bright
+  { bg: '#ecfdf5', hover: '#d1fae5', border: '#34d399' }, // 29: emerald-bright
+]
 
 // Format date like Jira: 17/Nov/2025
 const formatJiraDate = (dateString: string): string => {
@@ -446,6 +480,21 @@ const getTimeEstimateFromPoints = (points?: number): string => {
 
 export default function Projects2Page() {
   const { projects, addProject, addTask, addSubtask, updateProject, updateTask, updateSubtask, deleteProject, deleteTask, deleteSubtask, reorderProjects, reorderTasks, reorderSubtasks } = useGanttContext()
+  
+  // Create a stable color map for all projects - ensures each project gets a unique color
+  const projectColorMap = useMemo(() => {
+    const colorMap = new Map<string, { bg: string; hover: string; border: string }>()
+    projects.forEach((project, index) => {
+      const colorIndex = index % PROJECT_BACKGROUND_COLORS.length
+      colorMap.set(project.id, PROJECT_BACKGROUND_COLORS[colorIndex])
+    })
+    return colorMap
+  }, [projects])
+  
+  // Helper function to get project color from the map
+  const getProjectBackgroundColor = (projectId: string): { bg: string; hover: string; border: string } => {
+    return projectColorMap.get(projectId) || PROJECT_BACKGROUND_COLORS[0] // fallback to first color
+  }
   
   // Manually update App task's due date to 2026-12-26
   // This runs once when component mounts and projects are loaded
@@ -2296,6 +2345,9 @@ const DatePicker = ({
                     editingItem.id === tableRow.id &&
                     (editingItem.type !== 'subtask' || editingItem.taskId === tableRow.taskId)
 
+                  // Get project background color for consistent visual grouping
+                  const projectColor = getProjectBackgroundColor(tableRow.projectId)
+                  
                   // Different styling for each row type - matching Gantt V2.0 summary style
                   const getRowStyle = () => {
                     if (isEditing) {
@@ -2305,23 +2357,28 @@ const DatePicker = ({
                         fontWeight: '600' as const,
                       }
                     }
+                    // Use project-based background color for all row types (project, task, subtask)
+                    const baseBg = projectColor.bg
+                    const hoverBg = projectColor.hover
+                    const borderColor = projectColor.border
+                    
                     if (tableRow.type === 'project') {
                       return {
-                        borderLeft: '4px solid #6b7280', // gray border for projects
-                        backgroundColor: hoveredRow === tableRow.id ? '#f3f4f6' : '#f9fafb', // light gray bg
+                        borderLeft: `4px solid ${borderColor}`, // project color border
+                        backgroundColor: hoveredRow === tableRow.id ? hoverBg : baseBg,
                         fontWeight: '600' as const, // semibold
                       }
                     } else if (tableRow.type === 'task') {
                       return {
-                        borderLeft: '4px solid #3b82f6', // blue border for tasks
-                        backgroundColor: hoveredRow === tableRow.id ? '#eff6ff' : '#f8fafc', // light blue bg
+                        borderLeft: `4px solid ${borderColor}`, // project color border
+                        backgroundColor: hoveredRow === tableRow.id ? hoverBg : baseBg,
                         fontWeight: '500' as const, // medium
                       }
                     } else {
                       // subtask
                       return {
-                        borderLeft: '4px solid #8b5cf6', // purple border for subtasks
-                        backgroundColor: hoveredRow === tableRow.id ? '#f5f3ff' : '#fafafa', // light purple bg
+                        borderLeft: `4px solid ${borderColor}`, // project color border
+                        backgroundColor: hoveredRow === tableRow.id ? hoverBg : baseBg,
                         fontWeight: '400' as const, // normal
                       }
                     }

@@ -166,6 +166,26 @@ export function useGantt() {
       }
       
       if (loadedProjects.length > 0) {
+        // Filter out any test projects
+        const originalCount = loadedProjects.length
+        loadedProjects = loadedProjects.filter((p: GanttProject) => {
+          const name = p.name?.toLowerCase() || ''
+          return !name.includes('test')
+        })
+        
+        // If test projects were filtered out, save the filtered list back to storage
+        if (loadedProjects.length < originalCount) {
+          console.log(`🗑️ Removed ${originalCount - loadedProjects.length} test project(s)`)
+          // Save filtered projects to localStorage immediately
+          localStorage.setItem(GANTT_STORAGE_KEY, JSON.stringify(loadedProjects))
+          // Also save to Supabase if configured
+          if (loadedProjects.length > 0) {
+            saveProjectsToSupabase(loadedProjects).catch(err => {
+              console.error('Failed to save filtered projects to Supabase:', err)
+            })
+          }
+        }
+        
         // Color palette for projects
         const PROJECT_COLORS = [
           '#3b82f6', // blue
