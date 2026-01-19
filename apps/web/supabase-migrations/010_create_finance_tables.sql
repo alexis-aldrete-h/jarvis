@@ -108,3 +108,4 @@ CREATE TRIGGER update_finance_debts_updated_at BEFORE UPDATE ON finance_debts
 CREATE TRIGGER update_finance_retirement_accounts_updated_at BEFORE UPDATE ON finance_retirement_accounts
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+

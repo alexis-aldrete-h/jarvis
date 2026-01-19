@@ -189,3 +189,4 @@ CREATE POLICY "Allow anonymous delete access to finance_retirement_accounts"
   TO anon
   USING (true);
 
+

@@ -6,8 +6,10 @@ import { useFinances } from "@/hooks/useFinances"
 import { useNetWorth } from "@/hooks/useNetWorth"
 import { useFlightTraining } from "@/hooks/useFlightTraining"
 import { useAccountHistory, AccountSnapshot } from "@/hooks/useAccountHistory"
+import { useExchangeRate } from "@/hooks/useExchangeRate"
 import { formatDate } from "@jarvis/shared"
 import NetWorthTracker from "./NetWorthTracker"
+import FinancialProjection from "./FinancialProjection"
 import {
   ResponsiveContainer,
   AreaChart,
@@ -326,8 +328,9 @@ export default function FinanceManager() {
   const { getNetWorthSummary } = useNetWorth()
   const { getSummary: getFlightTrainingSummary } = useFlightTraining()
   const { snapshots, isLoaded: historyLoaded, addSnapshot, getHistoricalData, seedMockHistoricalData } = useAccountHistory()
+  const { rate: exchangeRate, lastUpdated, loading: exchangeRateLoading, error: exchangeRateError, refresh: refreshExchangeRate } = useExchangeRate()
 
-  const [activeView, setActiveView] = useState<'dashboard' | 'net-worth'>('dashboard')
+  const [activeView, setActiveView] = useState<'dashboard' | 'net-worth' | 'projection'>('dashboard')
   const [showTransactionForm, setShowTransactionForm] = useState(false)
   const [timeRange, setTimeRange] = useState<TimeRange>('1M')
   const [currentMonth, setCurrentMonth] = useState(new Date())
@@ -1185,7 +1188,6 @@ export default function FinanceManager() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold text-gray-900">Financial Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-2">Track your income, expenses, and financial trajectory.</p>
         </div>
         <div className="flex items-center gap-3">
           {transactions.length > 0 && (
@@ -1224,6 +1226,44 @@ export default function FinanceManager() {
         </div>
       </div>
 
+      {/* Exchange Rate Display */}
+      <div className="panel p-4 border border-gray-200 bg-gray-50">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-1 h-8 bg-gray-900 rounded-full"></div>
+              <div>
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">Exchange Rate</p>
+                <div className="flex items-baseline gap-2">
+                  <p className="text-lg font-semibold text-gray-900">
+                    1 USD = {exchangeRate.toFixed(2)} MXN
+                  </p>
+                  {exchangeRateLoading && (
+                    <span className="text-xs text-gray-400">Updating...</span>
+                  )}
+                  {exchangeRateError && (
+                    <span className="text-xs text-gray-400">(Fallback rate)</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            {lastUpdated && (
+              <p className="text-xs text-gray-400">
+                Updated {lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={refreshExchangeRate}
+            disabled={exchangeRateLoading}
+            className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Refresh exchange rate"
+          >
+            {exchangeRateLoading ? 'Updating...' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
       {/* View Menu */}
       <div className="flex items-center gap-2">
         <button
@@ -1245,6 +1285,16 @@ export default function FinanceManager() {
           }`}
         >
           Net Worth
+        </button>
+        <button
+          onClick={() => setActiveView('projection')}
+          className={`px-6 py-2.5 text-sm font-semibold rounded-xl smooth-transition ${
+            activeView === 'projection'
+              ? 'bg-gray-900 text-white'
+              : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-900'
+          }`}
+        >
+          Projection
         </button>
       </div>
 
@@ -2465,6 +2515,18 @@ export default function FinanceManager() {
       {activeView === 'net-worth' && (
         <div className="mt-6">
           <NetWorthTracker />
+        </div>
+      )}
+
+      {activeView === 'projection' && (
+        <div className="mt-6">
+          <FinancialProjection
+            transactions={transactions}
+            currentNetWorth={currentNetWorth}
+            currentSavings={netWorthSummary.totalSavingsUSD}
+            currentInvestments={netWorthSummary.totalInvestmentsUSD}
+            currentRetirement={netWorthSummary.totalRetirementUSD}
+          />
         </div>
       )}
 

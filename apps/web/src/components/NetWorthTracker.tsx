@@ -1,9 +1,10 @@
 "use client"
 
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useRef, useEffect, useCallback } from "react"
 import { BankAccount, Cash, Investment, Debt, RetirementAccount } from "@jarvis/shared"
 import { useNetWorth } from "@/hooks/useNetWorth"
 import { useFlightTraining } from "@/hooks/useFlightTraining"
+import { useNetWorthHistory } from "@/hooks/useNetWorthHistory"
 import {
   ResponsiveContainer,
   BarChart,
@@ -61,15 +62,15 @@ export default function NetWorthTracker() {
     updateRetirementAccount,
     deleteRetirementAccount,
     getNetWorthSummary,
-    clearAllNetWorthData,
   } = useNetWorth()
 
   const [activeSection, setActiveSection] = useState<'savings' | 'investments' | 'debt' | 'flight-training' | 'retirement' | 'summary'>('summary')
   const [editingItem, setEditingItem] = useState<{ type: string; id: string | null }>({ type: '', id: null })
-  const [showForm, setShowForm] = useState<{ type: string; visible: boolean }>({ type: '', visible: false })
+  const [showForm, setShowForm] = useState<{ type: string; visible: boolean; prefillBankName?: string }>({ type: '', visible: false })
   const [activeFlightTrainingTab, setActiveFlightTrainingTab] = useState<'cfi' | 'plane-rental' | 'others' | 'income'>('cfi')
   const [flightTrainingPage, setFlightTrainingPage] = useState(1)
   const [flightTrainingItemsPerPage, setFlightTrainingItemsPerPage] = useState<15 | 25 | 50 | 'all'>(25)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; transactionId: string | null; transactionType: string | null }>({ show: false, transactionId: null, transactionType: null })
   const [selectedAssets, setSelectedAssets] = useState<Record<string, boolean>>({
     'Savings': true,
     'Investments': true,
@@ -86,16 +87,32 @@ export default function NetWorthTracker() {
     extrasTransactions,
     incomeTransactions,
     clearAllFlightTrainingData,
+    addCFI,
+    updateCFI,
     deleteCFI,
+    addPlaneRental,
+    updatePlaneRental,
     deletePlaneRental,
+    addExtras,
+    updateExtras,
     deleteExtras,
+    addIncome,
+    updateIncome,
     deleteIncome,
   } = useFlightTraining()
   const flightTrainingSummary = getFlightTrainingSummary()
   
+  // Historical data hook
+  const { snapshots, isLoaded: historyLoaded, addSnapshot, getHistoricalData } = useNetWorthHistory()
+  
   // Calculate Flight Training as negative (it's an expense/investment)
+  // For the flight training section, keep it as negative
   const flightTrainingUSD = -Math.abs(flightTrainingSummary.netTotalUSD)
   const flightTrainingMXN = -Math.abs(flightTrainingSummary.netTotalMXN)
+  
+  // For summary section: invert the sign (negative becomes positive, positive becomes negative)
+  const flightTrainingSummaryUSD = -flightTrainingSummary.netTotalUSD
+  const flightTrainingSummaryMXN = -flightTrainingSummary.netTotalMXN
 
   // Group bank accounts by bank name
   const banksByBank = useMemo(() => {
@@ -114,6 +131,7 @@ export default function NetWorthTracker() {
     const grouped: Record<string, Investment[]> = {
       etf: [],
       crypto: [],
+      stock: [],
       other: [],
     }
     investments.forEach(inv => {
@@ -121,6 +139,8 @@ export default function NetWorthTracker() {
         grouped.etf.push(inv)
       } else if (inv.type === 'crypto') {
         grouped.crypto.push(inv)
+      } else if (inv.type === 'stock') {
+        grouped.stock.push(inv)
       } else if (inv.type !== '401k') {
         grouped.other.push(inv)
       }
@@ -132,10 +152,88 @@ export default function NetWorthTracker() {
   const retirementInvestments = useMemo(() => {
     return investments.filter(inv => inv.type === '401k')
   }, [investments])
+  
+  // Calculate total investments excluding 401k (for display in investments section and summary)
+  const totalNon401kInvestmentsUSD = useMemo(() => {
+    return investments.filter(inv => inv.type !== '401k').reduce((sum, i) => sum + i.valueUSD, 0)
+  }, [investments])
+  
+  const totalNon401kInvestmentsMXN = useMemo(() => {
+    return investments.filter(inv => inv.type !== '401k').reduce((sum, i) => sum + i.valueMXN, 0)
+  }, [investments])
 
   // Separate debts
   const debtIOwe = debts.filter(d => d.type === 'i-owe')
   const debtOwedToMe = debts.filter(d => d.type === 'owed-to-me')
+  
+  // Calculate adjusted debt totals (without flight training)
+  // Use the original debt values without flight training balance
+  const adjustedDebtOwedUSD = summary.totalDebtOwedUSD
+  const adjustedDebtOwedMXN = summary.totalDebtOwedMXN
+  const adjustedDebtOwedToMeUSD = summary.totalDebtOwedToMeUSD
+  const adjustedDebtOwedToMeMXN = summary.totalDebtOwedToMeMXN
+  
+  // Calculate adjusted net debt: If (Owed to Me - I Owe) > 0, then positive, else negative
+  // This means: if you're owed more than you owe, it's positive (good), otherwise negative
+  const adjustedNetDebtUSD = adjustedDebtOwedToMeUSD - adjustedDebtOwedUSD
+  const adjustedNetDebtMXN = adjustedDebtOwedToMeMXN - adjustedDebtOwedMXN
+
+  // Calculate total net worth for historical tracking
+  const totalNetWorthUSD = useMemo(() => {
+    return summary.totalSavingsUSD + adjustedNetDebtUSD + totalNon401kInvestmentsUSD + flightTrainingSummaryUSD + summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)
+  }, [summary.totalSavingsUSD, adjustedNetDebtUSD, totalNon401kInvestmentsUSD, flightTrainingSummaryUSD, summary.totalRetirementUSD, retirementInvestments])
+
+  const totalNetWorthMXN = useMemo(() => {
+    return summary.totalSavingsMXN + adjustedNetDebtMXN + totalNon401kInvestmentsMXN + flightTrainingSummaryMXN + summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0)
+  }, [summary.totalSavingsMXN, adjustedNetDebtMXN, totalNon401kInvestmentsMXN, flightTrainingSummaryMXN, summary.totalRetirementMXN, retirementInvestments])
+
+  // Save daily snapshot
+  useEffect(() => {
+    if (!historyLoaded) return
+
+    const today = new Date().toISOString().split('T')[0]
+    const lastSnapshot = snapshots[snapshots.length - 1]
+    
+    // Only add snapshot if we don't have one for today
+    if (!lastSnapshot || lastSnapshot.date.split('T')[0] !== today) {
+      addSnapshot({
+        date: new Date().toISOString(),
+        total_savings_usd: summary.totalSavingsUSD,
+        total_savings_mxn: summary.totalSavingsMXN,
+        total_investments_usd: totalNon401kInvestmentsUSD,
+        total_investments_mxn: totalNon401kInvestmentsMXN,
+        total_debt_usd: adjustedDebtOwedUSD + adjustedDebtOwedToMeUSD,
+        total_debt_mxn: adjustedDebtOwedMXN + adjustedDebtOwedToMeMXN,
+        net_debt_usd: adjustedNetDebtUSD,
+        net_debt_mxn: adjustedNetDebtMXN,
+        flight_training_usd: flightTrainingSummaryUSD,
+        flight_training_mxn: flightTrainingSummaryMXN,
+        total_retirement_usd: summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0),
+        total_retirement_mxn: summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0),
+        total_net_worth_usd: totalNetWorthUSD,
+        total_net_worth_mxn: totalNetWorthMXN,
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyLoaded, summary.totalSavingsUSD, totalNon401kInvestmentsUSD, adjustedNetDebtUSD, flightTrainingSummaryUSD, totalNetWorthUSD])
+
+  // Format historical data for chart - all categories
+  const formatHistoryForChart = useCallback((timeRange: '1W' | '1M' | '3M' | 'YTD' | 'ALL' = 'ALL') => {
+    const historicalData = getHistoricalData(timeRange)
+    return historicalData.map(snapshot => {
+      const date = new Date(snapshot.date)
+      return {
+        date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        fullDate: snapshot.date,
+        'Net Worth': snapshot.total_net_worth_usd,
+        'Savings': snapshot.total_savings_usd,
+        'Investments': snapshot.total_investments_usd,
+        'Debt': snapshot.net_debt_usd,
+        'Flight Training': snapshot.flight_training_usd,
+        'Retirement': snapshot.total_retirement_usd,
+      }
+    })
+  }, [getHistoricalData])
 
   // Chart data for summary
   const chartData = useMemo(() => {
@@ -341,7 +439,7 @@ export default function NetWorthTracker() {
           </div>
 
           {/* Savings Breakdown Chart - Enhanced */}
-          {(summary.totalCashUSD > 0 || (summary.totalSavingsUSD - summary.totalCashUSD) > 0) && (
+          {(summary.totalCashUSD !== 0 || summary.totalBanksUSD !== 0) && (
             <div className="panel p-8 bg-gradient-to-br from-white via-gradient-orange/5 to-gradient-bluePurple/5 border-2 border-gradient-orange/20 relative overflow-hidden">
               {/* Decorative background elements */}
               <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-orange/5 rounded-full blur-3xl -mr-32 -mt-32"></div>
@@ -377,11 +475,31 @@ export default function NetWorthTracker() {
                             <stop offset="0%" stopColor="#6366F1" stopOpacity={1}/>
                             <stop offset="100%" stopColor="#818CF8" stopOpacity={1}/>
                           </linearGradient>
+                          <linearGradient id="savingsDebtGradient" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stopColor="#EF4444" stopOpacity={1}/>
+                            <stop offset="100%" stopColor="#DC2626" stopOpacity={1}/>
+                          </linearGradient>
                         </defs>
                         <Pie
                           data={[
-                            { name: 'Cash', value: Math.max(0, summary.totalCashUSD), fill: 'url(#cashGradient)', mxn: summary.totalCashMXN },
-                            { name: 'Bank Accounts', value: Math.max(0, summary.totalSavingsUSD - summary.totalCashUSD), fill: 'url(#bankGradient)', mxn: summary.totalSavingsMXN - summary.totalCashMXN },
+                            { 
+                              name: 'Cash', 
+                              value: Math.abs(summary.totalCashUSD), 
+                              fill: summary.totalCashUSD < 0 ? 'url(#savingsDebtGradient)' : 'url(#cashGradient)', 
+                              mxn: summary.totalCashMXN,
+                              actualValue: summary.totalCashUSD,
+                              actualMxn: summary.totalCashMXN,
+                              isNegative: summary.totalCashUSD < 0
+                            },
+                            { 
+                              name: 'Bank Accounts', 
+                              value: Math.abs(summary.totalBanksUSD), 
+                              fill: summary.totalBanksUSD < 0 ? 'url(#savingsDebtGradient)' : 'url(#bankGradient)', 
+                              mxn: summary.totalBanksMXN,
+                              actualValue: summary.totalBanksUSD,
+                              actualMxn: summary.totalBanksMXN,
+                              isNegative: summary.totalBanksUSD < 0
+                            },
                           ].filter(item => item.value > 0)}
                           cx="50%"
                           cy="50%"
@@ -393,30 +511,25 @@ export default function NetWorthTracker() {
                           labelLine={false}
                         >
                           {[
-                            { name: 'Cash', value: Math.max(0, summary.totalCashUSD), fill: 'url(#cashGradient)' },
-                            { name: 'Bank Accounts', value: Math.max(0, summary.totalSavingsUSD - summary.totalCashUSD), fill: 'url(#bankGradient)' },
+                            { name: 'Cash', value: Math.abs(summary.totalCashUSD), fill: summary.totalCashUSD < 0 ? 'url(#savingsDebtGradient)' : 'url(#cashGradient)', isNegative: summary.totalCashUSD < 0 },
+                            { name: 'Bank Accounts', value: Math.abs(summary.totalBanksUSD), fill: summary.totalBanksUSD < 0 ? 'url(#savingsDebtGradient)' : 'url(#bankGradient)', isNegative: summary.totalBanksUSD < 0 },
                           ].filter(item => item.value > 0).map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.fill} stroke="#ffffff" strokeWidth={3} />
+                            <Cell key={`cell-${index}`} fill={entry.fill} stroke="#ffffff" strokeWidth={3} strokeDasharray={entry.isNegative ? "5 5" : "0"} />
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold text-lg">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                                <p className="text-xs text-text-secondary">{name}</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(249, 115, 22, 0.3)",
-                            borderRadius: "16px",
-                            padding: "16px",
-                            boxShadow: "0 12px 32px rgba(0, 0, 0, 0.15)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-orange-300/30 rounded-2xl p-4 shadow-xl space-y-1">
+                                  <p className="font-bold text-lg text-text-primary">{currencyFormatter.format(data.actualValue || data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.actualMxn || data.mxn)} MXN</p>
+                                  <p className="text-xs text-text-secondary">{data.name}</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                       </PieChart>
@@ -428,9 +541,9 @@ export default function NetWorthTracker() {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
                         data={[
-                          { name: 'Cash', value: Math.max(0, summary.totalCashUSD), mxn: summary.totalCashMXN, fill: '#F97316' },
-                          { name: 'Bank Accounts', value: Math.max(0, summary.totalSavingsUSD - summary.totalCashUSD), mxn: summary.totalSavingsMXN - summary.totalCashMXN, fill: '#6366F1' },
-                        ].filter(item => item.value > 0)}
+                          { name: 'Cash', value: summary.totalCashUSD, mxn: summary.totalCashMXN, fill: '#F97316' },
+                          { name: 'Bank Accounts', value: summary.totalBanksUSD, mxn: summary.totalBanksMXN, fill: '#6366F1' },
+                        ].filter(item => item.value !== 0)}
                         margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                       >
                         <defs>
@@ -455,22 +568,17 @@ export default function NetWorthTracker() {
                           tickFormatter={(value) => `$${(value / 1000).toFixed(1)}k`}
                         />
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(249, 115, 22, 0.3)",
-                            borderRadius: "12px",
-                            padding: "12px",
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.1)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-orange-300/30 rounded-xl p-3 shadow-lg space-y-1">
+                                  <p className="font-bold text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                         <Bar 
@@ -662,7 +770,19 @@ export default function NetWorthTracker() {
                   
                   return (
                     <div key={bankName} className="space-y-4">
-                      <h4 className="text-sm font-bold text-text-primary uppercase">{bankName}</h4>
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-bold text-text-primary uppercase">{bankName}</h4>
+                        <button
+                          onClick={() => {
+                            setEditingItem({ type: 'bank', id: null })
+                            setShowForm({ type: 'bank', visible: true, prefillBankName: bankName })
+                          }}
+                          className="text-xs font-medium text-text-tertiary hover:text-gradient-bluePurple px-2 py-1 rounded smooth-transition"
+                          title="Add another account to this bank"
+                        >
+                          + Add Account
+                        </button>
+                      </div>
                       <div className="panel overflow-hidden border border-gradient-bluePurple/20">
                 <div className="overflow-x-auto">
                   <table className="w-full">
@@ -774,7 +894,13 @@ export default function NetWorthTracker() {
       )}
 
       {/* Investments Section */}
-      {activeSection === 'investments' && (
+      {activeSection === 'investments' && (() => {
+        // Calculate total investments excluding 401k (which goes to retirement)
+        const non401kInvestments = investments.filter(inv => inv.type !== '401k')
+        const totalNon401kInvestmentsUSD = non401kInvestments.reduce((sum, i) => sum + i.valueUSD, 0)
+        const totalNon401kInvestmentsMXN = non401kInvestments.reduce((sum, i) => sum + i.valueMXN, 0)
+        
+        return (
         <div className="space-y-6">
           {/* Total Investments Hero Card */}
           <div className="panel p-6 bg-gradient-to-br from-gradient-yellowOrange/10 via-gradient-cream/5 to-white border-2 border-gradient-yellowOrange/20">
@@ -782,9 +908,9 @@ export default function NetWorthTracker() {
               <div>
                 <p className="text-sm text-text-tertiary uppercase tracking-wider mb-1">Total Investments</p>
                 <h2 className="text-3xl font-bold text-text-primary">
-                  {currencyFormatter.format(summary.totalInvestmentsUSD)}
+                  {currencyFormatter.format(totalNon401kInvestmentsUSD)}
                 </h2>
-                <p className="text-sm text-text-secondary mt-1">{currencyFormatterMXN.format(summary.totalInvestmentsMXN)} MXN</p>
+                <p className="text-sm text-text-secondary mt-1">{currencyFormatterMXN.format(totalNon401kInvestmentsMXN)} MXN</p>
               </div>
             <button
               onClick={() => setShowForm({ type: 'investment', visible: true })}
@@ -795,7 +921,7 @@ export default function NetWorthTracker() {
           </div>
 
             {/* Breakdown */}
-            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gradient-orange/20">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-gradient-orange/20">
               <div>
                 <p className="text-xs text-text-tertiary mb-1">ETFs</p>
                 <p className="text-lg font-semibold text-text-primary">
@@ -808,11 +934,23 @@ export default function NetWorthTracker() {
                   {currencyFormatter.format(investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0))}
                 </p>
               </div>
+              <div>
+                <p className="text-xs text-text-tertiary mb-1">Stocks</p>
+                <p className="text-lg font-semibold text-text-primary">
+                  {currencyFormatter.format(investmentsByType.stock.reduce((sum, i) => sum + i.valueUSD, 0))}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-text-tertiary mb-1">Other</p>
+                <p className="text-lg font-semibold text-text-primary">
+                  {currencyFormatter.format(investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0))}
+                </p>
+              </div>
             </div>
           </div>
 
           {/* Investments Breakdown Chart - Enhanced */}
-          {summary.totalInvestmentsUSD > 0 && (
+          {totalNon401kInvestmentsUSD > 0 && (
             <div className="panel p-8 bg-gradient-to-br from-white via-gradient-yellowOrange/5 to-gradient-purple/5 border-2 border-gradient-yellowOrange/20 relative overflow-hidden">
               {/* Decorative background elements */}
               <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-yellowOrange/5 rounded-full blur-3xl -mr-32 -mt-32"></div>
@@ -823,14 +961,14 @@ export default function NetWorthTracker() {
                   <div>
                     <h3 className="text-xl font-bold text-text-primary flex items-center gap-2">
                       <span className="text-2xl">📈</span>
-                      ETFs vs Cryptocurrencies
+                      Investment Portfolio
                     </h3>
                     <p className="text-sm text-text-tertiary mt-1">Portfolio allocation across investment types</p>
                   </div>
                   <div className="text-right bg-white/60 backdrop-blur-sm px-4 py-3 rounded-xl border border-gradient-yellowOrange/20">
                     <p className="text-xs text-text-tertiary">Total Investments</p>
-                    <p className="text-lg font-bold text-text-primary">{currencyFormatter.format(summary.totalInvestmentsUSD)}</p>
-                    <p className="text-xs text-text-secondary">{currencyFormatterMXN.format(summary.totalInvestmentsMXN)} MXN</p>
+                    <p className="text-lg font-bold text-text-primary">{currencyFormatter.format(totalNon401kInvestmentsUSD)}</p>
+                    <p className="text-xs text-text-secondary">{currencyFormatterMXN.format(totalNon401kInvestmentsMXN)} MXN</p>
                   </div>
                 </div>
                 
@@ -848,6 +986,10 @@ export default function NetWorthTracker() {
                             <stop offset="0%" stopColor="#A855F7" stopOpacity={1}/>
                             <stop offset="100%" stopColor="#C084FC" stopOpacity={1}/>
                           </linearGradient>
+                          <linearGradient id="stockGradient" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stopColor="#10B981" stopOpacity={1}/>
+                            <stop offset="100%" stopColor="#34D399" stopOpacity={1}/>
+                          </linearGradient>
                           <linearGradient id="otherGradient" x1="0" y1="0" x2="1" y2="1">
                             <stop offset="0%" stopColor="#8B5CF6" stopOpacity={1}/>
                             <stop offset="100%" stopColor="#A78BFA" stopOpacity={1}/>
@@ -855,10 +997,11 @@ export default function NetWorthTracker() {
                         </defs>
                         <Pie
                           data={[
-                            { name: 'ETFs', value: Math.max(0, investmentsByType.etf.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#etfGradient)', mxn: investmentsByType.etf.reduce((sum, i) => sum + i.valueMXN, 0) },
-                            { name: 'Cryptocurrencies', value: Math.max(0, investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#cryptoGradient)', mxn: investmentsByType.crypto.reduce((sum, i) => sum + i.valueMXN, 0) },
-                            { name: 'Other', value: Math.max(0, investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#otherGradient)', mxn: investmentsByType.other.reduce((sum, i) => sum + i.valueMXN, 0) },
-                          ].filter(item => item.value > 0)}
+                            { name: 'ETFs', value: investmentsByType.etf.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#etfGradient)', mxn: investmentsByType.etf.reduce((sum, i) => sum + i.valueMXN, 0) },
+                            { name: 'Cryptocurrencies', value: investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#cryptoGradient)', mxn: investmentsByType.crypto.reduce((sum, i) => sum + i.valueMXN, 0) },
+                            { name: 'Stocks', value: investmentsByType.stock.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#stockGradient)', mxn: investmentsByType.stock.reduce((sum, i) => sum + i.valueMXN, 0) },
+                            { name: 'Other', value: investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#otherGradient)', mxn: investmentsByType.other.reduce((sum, i) => sum + i.valueMXN, 0) },
+                          ].filter(item => item.value !== 0)}
                           cx="50%"
                           cy="50%"
                           innerRadius={70}
@@ -869,31 +1012,27 @@ export default function NetWorthTracker() {
                           labelLine={false}
                         >
                           {[
-                            { name: 'ETFs', value: Math.max(0, investmentsByType.etf.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#etfGradient)' },
-                            { name: 'Cryptocurrencies', value: Math.max(0, investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#cryptoGradient)' },
-                            { name: 'Other', value: Math.max(0, investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#otherGradient)' },
-                          ].filter(item => item.value > 0).map((entry, index) => (
+                            { name: 'ETFs', value: investmentsByType.etf.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#etfGradient)' },
+                            { name: 'Cryptocurrencies', value: investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#cryptoGradient)' },
+                            { name: 'Stocks', value: investmentsByType.stock.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#stockGradient)' },
+                            { name: 'Other', value: investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#otherGradient)' },
+                          ].filter(item => item.value !== 0).map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.fill} stroke="#ffffff" strokeWidth={3} />
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold text-lg">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                                <p className="text-xs text-text-secondary">{name}</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(245, 158, 11, 0.3)",
-                            borderRadius: "16px",
-                            padding: "16px",
-                            boxShadow: "0 12px 32px rgba(0, 0, 0, 0.15)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-orange-300/30 rounded-2xl p-4 shadow-xl space-y-1">
+                                  <p className="font-bold text-lg text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                  <p className="text-xs text-text-secondary">{data.name}</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                       </PieChart>
@@ -905,10 +1044,11 @@ export default function NetWorthTracker() {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
                         data={[
-                          { name: 'ETFs', value: Math.max(0, investmentsByType.etf.reduce((sum, i) => sum + i.valueUSD, 0)), mxn: investmentsByType.etf.reduce((sum, i) => sum + i.valueMXN, 0), fill: '#F59E0B' },
-                          { name: 'Cryptocurrencies', value: Math.max(0, investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0)), mxn: investmentsByType.crypto.reduce((sum, i) => sum + i.valueMXN, 0), fill: '#A855F7' },
-                          { name: 'Other', value: Math.max(0, investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0)), mxn: investmentsByType.other.reduce((sum, i) => sum + i.valueMXN, 0), fill: '#8B5CF6' },
-                        ].filter(item => item.value > 0)}
+                          { name: 'ETFs', value: investmentsByType.etf.reduce((sum, i) => sum + i.valueUSD, 0), mxn: investmentsByType.etf.reduce((sum, i) => sum + i.valueMXN, 0), fill: '#F59E0B' },
+                          { name: 'Cryptocurrencies', value: investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0), mxn: investmentsByType.crypto.reduce((sum, i) => sum + i.valueMXN, 0), fill: '#A855F7' },
+                          { name: 'Stocks', value: investmentsByType.stock.reduce((sum, i) => sum + i.valueUSD, 0), mxn: investmentsByType.stock.reduce((sum, i) => sum + i.valueMXN, 0), fill: '#10B981' },
+                          { name: 'Other', value: investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0), mxn: investmentsByType.other.reduce((sum, i) => sum + i.valueMXN, 0), fill: '#8B5CF6' },
+                        ].filter(item => item.value !== 0)}
                         margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                       >
                         <defs>
@@ -921,6 +1061,10 @@ export default function NetWorthTracker() {
                             <stop offset="100%" stopColor="#C084FC" stopOpacity={0.6}/>
                           </linearGradient>
                           <linearGradient id="barGradient3" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#10B981" stopOpacity={0.9}/>
+                            <stop offset="100%" stopColor="#34D399" stopOpacity={0.6}/>
+                          </linearGradient>
+                          <linearGradient id="barGradient4" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="#8B5CF6" stopOpacity={0.9}/>
                             <stop offset="100%" stopColor="#A78BFA" stopOpacity={0.6}/>
                           </linearGradient>
@@ -937,22 +1081,17 @@ export default function NetWorthTracker() {
                           tickFormatter={(value) => `$${(value / 1000).toFixed(1)}k`}
                         />
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(245, 158, 11, 0.3)",
-                            borderRadius: "12px",
-                            padding: "12px",
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.1)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-orange-300/30 rounded-xl p-3 shadow-lg space-y-1">
+                                  <p className="font-bold text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                         <Bar 
@@ -960,10 +1099,11 @@ export default function NetWorthTracker() {
                           radius={[12, 12, 0, 0]}
                         >
                           {[
-                            { name: 'ETFs', value: Math.max(0, investmentsByType.etf.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#barGradient1)' },
-                            { name: 'Cryptocurrencies', value: Math.max(0, investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#barGradient2)' },
-                            { name: 'Other', value: Math.max(0, investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#barGradient3)' },
-                          ].filter(item => item.value > 0).map((entry, index) => (
+                            { name: 'ETFs', value: investmentsByType.etf.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#barGradient1)' },
+                            { name: 'Cryptocurrencies', value: investmentsByType.crypto.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#barGradient2)' },
+                            { name: 'Stocks', value: investmentsByType.stock.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#barGradient3)' },
+                            { name: 'Other', value: investmentsByType.other.reduce((sum, i) => sum + i.valueUSD, 0), fill: 'url(#barGradient4)' },
+                          ].filter(item => item.value !== 0).map((entry, index) => (
                             <Cell key={`bar-cell-${index}`} fill={entry.fill} />
                           ))}
                         </Bar>
@@ -1234,14 +1374,15 @@ export default function NetWorthTracker() {
             </div>
           )}
         </div>
-      )}
+        )
+      })()}
 
       {/* Debt Section */}
       {activeSection === 'debt' && (
         <div className="space-y-6">
           {/* Net Debt Hero Card */}
           <div className={`panel p-6 border-2 ${
-            summary.netDebtUSD < 0
+            adjustedNetDebtUSD < 0
               ? 'bg-gradient-to-br from-gradient-orangeRed/10 via-gradient-bluePurple/5 to-white border-gradient-orangeRed/30'
               : 'bg-gradient-to-br from-gradient-bluePurple/10 via-gradient-orange/5 to-white border-gradient-bluePurple/20'
           }`}>
@@ -1249,11 +1390,11 @@ export default function NetWorthTracker() {
               <div>
                 <p className="text-sm text-text-tertiary uppercase tracking-wider mb-1">Net Debt</p>
                 <h2 className={`text-3xl font-bold ${
-                  summary.netDebtUSD < 0 ? 'text-gradient-orangeRed' : 'text-text-primary'
+                  adjustedNetDebtUSD < 0 ? 'text-gradient-orangeRed' : 'text-text-primary'
                 }`}>
-                  {summary.netDebtUSD < 0 ? '-' : ''}{currencyFormatter.format(Math.abs(summary.netDebtUSD))}
+                  {adjustedNetDebtUSD < 0 ? '-' : ''}{currencyFormatter.format(Math.abs(adjustedNetDebtUSD))}
                 </h2>
-                <p className="text-sm text-text-secondary mt-1">{currencyFormatterMXN.format(summary.netDebtMXN)} MXN</p>
+                <p className="text-sm text-text-secondary mt-1">{currencyFormatterMXN.format(Math.abs(adjustedNetDebtMXN))} MXN</p>
               </div>
             <button
               onClick={() => setShowForm({ type: 'debt', visible: true })}
@@ -1268,20 +1409,20 @@ export default function NetWorthTracker() {
               <div>
                 <p className="text-xs text-text-tertiary mb-1">I Owe</p>
                 <p className="text-lg font-semibold text-gradient-orangeRed">
-                  {currencyFormatter.format(summary.totalDebtOwedUSD)}
+                  {currencyFormatter.format(adjustedDebtOwedUSD)}
                 </p>
               </div>
               <div>
                 <p className="text-xs text-text-tertiary mb-1">Owed to Me</p>
                 <p className="text-lg font-semibold text-gradient-bluePurple">
-                  {currencyFormatter.format(summary.totalDebtOwedToMeUSD)}
+                  {currencyFormatter.format(adjustedDebtOwedToMeUSD)}
                 </p>
               </div>
             </div>
           </div>
 
           {/* Debt Breakdown Chart - Enhanced */}
-          {(summary.totalDebtOwedUSD > 0 || summary.totalDebtOwedToMeUSD > 0) && (
+          {(adjustedDebtOwedUSD > 0 || adjustedDebtOwedToMeUSD > 0) && (
             <div className="panel p-8 bg-gradient-to-br from-white via-gradient-orangeRed/5 to-gradient-bluePurple/5 border-2 border-gradient-orangeRed/20 relative overflow-hidden">
               {/* Decorative background elements */}
               <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-orangeRed/5 rounded-full blur-3xl -mr-32 -mt-32"></div>
@@ -1296,12 +1437,12 @@ export default function NetWorthTracker() {
                     </h3>
                     <p className="text-sm text-text-tertiary mt-1">Overview of your debt obligations</p>
                   </div>
-                  <div className={`text-right bg-white/60 backdrop-blur-sm px-4 py-3 rounded-xl border ${summary.netDebtUSD < 0 ? 'border-red-300' : 'border-gradient-bluePurple/20'}`}>
+                  <div className={`text-right bg-white/60 backdrop-blur-sm px-4 py-3 rounded-xl border ${(adjustedDebtOwedUSD - adjustedDebtOwedToMeUSD) < 0 ? 'border-red-300' : 'border-gradient-bluePurple/20'}`}>
                     <p className="text-xs text-text-tertiary">Net Debt</p>
-                    <p className={`text-lg font-bold ${summary.netDebtUSD < 0 ? 'text-red-600' : 'text-text-primary'}`}>
-                      {summary.netDebtUSD < 0 ? '-' : ''}{currencyFormatter.format(Math.abs(summary.netDebtUSD))}
+                    <p className={`text-lg font-bold ${(adjustedDebtOwedUSD - adjustedDebtOwedToMeUSD) < 0 ? 'text-red-600' : 'text-text-primary'}`}>
+                      {(adjustedDebtOwedUSD - adjustedDebtOwedToMeUSD) < 0 ? '-' : ''}{currencyFormatter.format(Math.abs(adjustedDebtOwedUSD - adjustedDebtOwedToMeUSD))}
                     </p>
-                    <p className="text-xs text-text-secondary">{currencyFormatterMXN.format(Math.abs(summary.netDebtMXN))} MXN</p>
+                    <p className="text-xs text-text-secondary">{currencyFormatterMXN.format(Math.abs(adjustedDebtOwedMXN - adjustedDebtOwedToMeMXN))} MXN</p>
                   </div>
                 </div>
                 
@@ -1322,8 +1463,8 @@ export default function NetWorthTracker() {
                         </defs>
                         <Pie
                           data={[
-                            { name: 'I Owe', value: Math.max(0, summary.totalDebtOwedUSD), fill: 'url(#oweGradient)', mxn: summary.totalDebtOwedMXN },
-                            { name: 'Owed to Me', value: Math.max(0, summary.totalDebtOwedToMeUSD), fill: 'url(#owedGradient)', mxn: summary.totalDebtOwedToMeMXN },
+                            { name: 'I Owe', value: Math.max(0, adjustedDebtOwedUSD), fill: 'url(#oweGradient)', mxn: adjustedDebtOwedMXN },
+                            { name: 'Owed to Me', value: Math.max(0, adjustedDebtOwedToMeUSD), fill: 'url(#owedGradient)', mxn: adjustedDebtOwedToMeMXN },
                           ].filter(item => item.value > 0)}
                           cx="50%"
                           cy="50%"
@@ -1335,30 +1476,25 @@ export default function NetWorthTracker() {
                           labelLine={false}
                         >
                           {[
-                            { name: 'I Owe', value: Math.max(0, summary.totalDebtOwedUSD), fill: 'url(#oweGradient)' },
-                            { name: 'Owed to Me', value: Math.max(0, summary.totalDebtOwedToMeUSD), fill: 'url(#owedGradient)' },
+                            { name: 'I Owe', value: Math.max(0, adjustedDebtOwedUSD), fill: 'url(#oweGradient)' },
+                            { name: 'Owed to Me', value: Math.max(0, adjustedDebtOwedToMeUSD), fill: 'url(#owedGradient)' },
                           ].filter(item => item.value > 0).map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.fill} stroke="#ffffff" strokeWidth={3} />
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold text-lg">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                                <p className="text-xs text-text-secondary">{name}</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(255, 107, 53, 0.3)",
-                            borderRadius: "16px",
-                            padding: "16px",
-                            boxShadow: "0 12px 32px rgba(0, 0, 0, 0.15)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-orange-500/30 rounded-2xl p-4 shadow-xl space-y-1">
+                                  <p className="font-bold text-lg text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                  <p className="text-xs text-text-secondary">{data.name}</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                       </PieChart>
@@ -1372,14 +1508,14 @@ export default function NetWorthTracker() {
                         data={[
                           { 
                             name: 'I Owe', 
-                            value: Math.max(0, summary.totalDebtOwedUSD), 
-                            mxn: summary.totalDebtOwedMXN,
+                            value: Math.max(0, adjustedDebtOwedUSD), 
+                            mxn: adjustedDebtOwedMXN,
                             fill: '#FF6B35'
                           },
                           { 
                             name: 'Owed to Me', 
-                            value: Math.max(0, summary.totalDebtOwedToMeUSD), 
-                            mxn: summary.totalDebtOwedToMeMXN,
+                            value: Math.max(0, adjustedDebtOwedToMeUSD), 
+                            mxn: adjustedDebtOwedToMeMXN,
                             fill: '#6366F1'
                           },
                         ].filter(item => item.value > 0)}
@@ -1407,22 +1543,17 @@ export default function NetWorthTracker() {
                           tickFormatter={(value) => `$${(value / 1000).toFixed(1)}k`}
                         />
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(255, 107, 53, 0.3)",
-                            borderRadius: "12px",
-                            padding: "12px",
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.1)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-orange-500/30 rounded-xl p-3 shadow-lg space-y-1">
+                                  <p className="font-bold text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                         <Bar 
@@ -1430,8 +1561,8 @@ export default function NetWorthTracker() {
                           radius={[12, 12, 0, 0]}
                         >
                           {[
-                            { name: 'I Owe', value: Math.max(0, summary.totalDebtOwedUSD), fill: 'url(#debtBarGradient1)' },
-                            { name: 'Owed to Me', value: Math.max(0, summary.totalDebtOwedToMeUSD), fill: 'url(#debtBarGradient2)' },
+                            { name: 'I Owe', value: Math.max(0, adjustedDebtOwedUSD), fill: 'url(#debtBarGradient1)' },
+                            { name: 'Owed to Me', value: Math.max(0, adjustedDebtOwedToMeUSD), fill: 'url(#debtBarGradient2)' },
                           ].filter(item => item.value > 0).map((entry, index) => (
                             <Cell key={`debt-bar-cell-${index}`} fill={entry.fill} />
                           ))}
@@ -1465,8 +1596,7 @@ export default function NetWorthTracker() {
                 </thead>
                     <tbody className="divide-y divide-gradient-orangeRed/10">
                       {debtIOwe.map((debt) => {
-                        const iOweTotal = summary.totalDebtOwedUSD
-                        const percentage = iOweTotal > 0 ? (debt.amountUSD / iOweTotal) * 100 : 0
+                        const percentage = adjustedDebtOwedUSD > 0 ? (debt.amountUSD / adjustedDebtOwedUSD) * 100 : 0
                         
                         return (
                           <tr key={debt.id} className="hover:bg-gradient-orangeRed/5 smooth-transition group">
@@ -1510,10 +1640,10 @@ export default function NetWorthTracker() {
                           <span className="text-sm text-text-primary">I Owe Total</span>
                         </td>
                         <td className="text-right px-4 py-3">
-                          <span className="text-sm text-orange-600">{currencyFormatter.format(summary.totalDebtOwedUSD)}</span>
+                          <span className="text-sm text-orange-600">{currencyFormatter.format(adjustedDebtOwedUSD)}</span>
                         </td>
                         <td className="text-right px-4 py-3">
-                          <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(summary.totalDebtOwedMXN)} MXN</span>
+                          <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(adjustedDebtOwedMXN)} MXN</span>
                         </td>
                         <td className="text-right px-4 py-3">
                           <span className="text-sm text-orange-600">100.0%</span>
@@ -1548,8 +1678,7 @@ export default function NetWorthTracker() {
                 </thead>
                     <tbody className="divide-y divide-gradient-bluePurple/10">
                       {debtOwedToMe.map((debt) => {
-                        const owedToMeTotal = summary.totalDebtOwedToMeUSD
-                        const percentage = owedToMeTotal > 0 ? (debt.amountUSD / owedToMeTotal) * 100 : 0
+                        const percentage = adjustedDebtOwedToMeUSD > 0 ? (debt.amountUSD / adjustedDebtOwedToMeUSD) * 100 : 0
                         
                         return (
                           <tr key={debt.id} className="hover:bg-gradient-bluePurple/5 smooth-transition group">
@@ -1593,10 +1722,10 @@ export default function NetWorthTracker() {
                           <span className="text-sm text-text-primary">Owed to Me Total</span>
                         </td>
                         <td className="text-right px-4 py-3">
-                          <span className="text-sm text-purple-600">{currencyFormatter.format(summary.totalDebtOwedToMeUSD)}</span>
+                          <span className="text-sm text-purple-600">{currencyFormatter.format(adjustedDebtOwedToMeUSD)}</span>
                         </td>
                         <td className="text-right px-4 py-3">
-                          <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(summary.totalDebtOwedToMeMXN)} MXN</span>
+                          <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(adjustedDebtOwedToMeMXN)} MXN</span>
                         </td>
                         <td className="text-right px-4 py-3">
                           <span className="text-sm text-purple-600">100.0%</span>
@@ -1741,23 +1870,18 @@ export default function NetWorthTracker() {
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold text-lg">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                                <p className="text-xs text-text-secondary">{name}</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(147, 51, 234, 0.3)",
-                            borderRadius: "16px",
-                            padding: "16px",
-                            boxShadow: "0 12px 32px rgba(0, 0, 0, 0.15)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-purple-500/30 rounded-2xl p-4 shadow-xl space-y-1">
+                                  <p className="font-bold text-lg text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                  <p className="text-xs text-text-secondary">{data.name}</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                       </PieChart>
@@ -1806,22 +1930,17 @@ export default function NetWorthTracker() {
                           tickFormatter={(value) => `$${(value / 1000).toFixed(1)}k`}
                         />
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(147, 51, 234, 0.3)",
-                            borderRadius: "12px",
-                            padding: "12px",
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.1)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-purple-500/30 rounded-xl p-3 shadow-lg space-y-1">
+                                  <p className="font-bold text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                         <Bar 
@@ -1846,8 +1965,7 @@ export default function NetWorthTracker() {
           )}
 
           {/* Flight Training Transactions - Tabbed Interface */}
-          {(cfiTransactions.length > 0 || planeRentalTransactions.length > 0 || extrasTransactions.length > 0 || incomeTransactions.length > 0) && (
-            <div className="space-y-4">
+          <div className="space-y-4">
               {/* Mini Navbar */}
               <div className="flex items-center justify-between border-b border-gradient-purple/20 pb-0">
                 <div className="flex items-center gap-2">
@@ -1882,32 +2000,52 @@ export default function NetWorthTracker() {
                     </button>
                   ))}
                 </div>
-                {/* Items Per Page Dropdown */}
-                <div className="flex items-center gap-2 px-4">
-                  <span className="text-xs text-text-tertiary">Show:</span>
-                  <select
-                    value={flightTrainingItemsPerPage}
-                    onChange={(e) => {
-                      setFlightTrainingItemsPerPage(e.target.value as 15 | 25 | 50 | 'all')
-                      setFlightTrainingPage(1) // Reset to first page when changing items per page
+                <div className="flex items-center gap-4">
+                  {/* Add Button */}
+                  <button
+                    onClick={() => {
+                      setEditingItem({ type: `flight-${activeFlightTrainingTab}`, id: null })
+                      setShowForm({ type: `flight-${activeFlightTrainingTab}`, visible: true })
                     }}
-                    className="text-xs px-2 py-1 rounded border border-gradient-purple/20 bg-white text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500/20"
+                    className="px-4 py-2 text-sm font-medium rounded-xl border border-gradient-purple/20 bg-white/60 backdrop-blur-sm text-text-primary hover:border-gradient-purple/40 smooth-transition"
                   >
-                    <option value={15}>15</option>
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                    <option value="all">All</option>
-                  </select>
+                    + Add {activeFlightTrainingTab === 'cfi' ? 'CFI' : activeFlightTrainingTab === 'plane-rental' ? 'Plane Rental' : activeFlightTrainingTab === 'others' ? 'Extra' : 'Income'}
+                  </button>
+                  {/* Items Per Page Dropdown */}
+                  <div className="flex items-center gap-2 px-4">
+                    <span className="text-xs text-text-tertiary">Show:</span>
+                    <select
+                      value={flightTrainingItemsPerPage}
+                      onChange={(e) => {
+                        setFlightTrainingItemsPerPage(e.target.value as 15 | 25 | 50 | 'all')
+                        setFlightTrainingPage(1) // Reset to first page when changing items per page
+                      }}
+                      className="text-xs px-2 py-1 rounded border border-gradient-purple/20 bg-white text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500/20"
+                    >
+                      <option value={15}>15</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value="all">All</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
               {/* CFI Tab Content */}
               {activeFlightTrainingTab === 'cfi' && cfiTransactions.length > 0 && (() => {
-                const itemsPerPage = flightTrainingItemsPerPage === 'all' ? cfiTransactions.length : flightTrainingItemsPerPage
-                const totalPages = Math.ceil(cfiTransactions.length / itemsPerPage)
+                // Sort transactions by date (newest first)
+                const sortedTransactions = [...cfiTransactions].sort((a, b) => {
+                  const dateA = a.date || ''
+                  const dateB = b.date || ''
+                  // Compare dates as strings (YYYY-MM-DD format) - descending order (newest first)
+                  return dateB.localeCompare(dateA)
+                })
+                
+                const itemsPerPage = flightTrainingItemsPerPage === 'all' ? sortedTransactions.length : flightTrainingItemsPerPage
+                const totalPages = Math.ceil(sortedTransactions.length / itemsPerPage)
                 const startIndex = (flightTrainingPage - 1) * itemsPerPage
                 const endIndex = startIndex + itemsPerPage
-                const paginatedTransactions = cfiTransactions.slice(startIndex, endIndex)
+                const paginatedTransactions = sortedTransactions.slice(startIndex, endIndex)
                 
                 return (
                   <>
@@ -1916,54 +2054,79 @@ export default function NetWorthTracker() {
                         <table className="w-full">
                           <thead className="bg-gradient-purple/5 border-b border-gradient-purple/20">
                             <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">ASSET</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">CONCEPT</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">DATE</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">HOURS</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">RATE PER HOUR</th>
                               <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">TOTAL VALUE</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">MXN VALUE</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">%</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-20">ACTIONS</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-24">ACTIONS</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gradient-purple/10">
                             {paginatedTransactions.map((transaction, index) => {
-                        const cfiTotal = flightTrainingSummary.totalCFIUSD
-                        const percentage = cfiTotal > 0 ? (transaction.totalUSD / cfiTotal) * 100 : 0
-                        const transactionNumber = startIndex + index + 1
+                        // Format date for display (avoid timezone issues by parsing YYYY-MM-DD directly)
+                        const formatDate = (dateString: string | undefined) => {
+                          if (!dateString) return 'N/A'
+                          try {
+                            // If it's already in YYYY-MM-DD format, parse it directly to avoid timezone issues
+                            if (dateString.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                              const [year, month, day] = dateString.split('-')
+                              const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
+                              return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                            }
+                            // Otherwise, try to parse as-is
+                            const date = new Date(dateString)
+                            // Check if date is valid
+                            if (isNaN(date.getTime())) {
+                              return dateString
+                            }
+                            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                          } catch {
+                            return dateString
+                          }
+                        }
                         
                         return (
                           <tr key={transaction.id} className="hover:bg-gradient-purple/5 smooth-transition group">
                             <td className="px-4 py-3">
-                              <span className="text-sm font-semibold text-text-tertiary">{transactionNumber}</span>
+                              <span className="text-sm font-semibold text-text-primary">{transaction.concept}</span>
                             </td>
                             <td className="px-4 py-3">
-                              <div className="flex flex-col">
-                                <span className="text-sm font-semibold text-text-primary">{transaction.concept}</span>
-                                <span className="text-xs text-text-tertiary">Instructor {transaction.instructorId} • {transaction.hours.toFixed(2)} hrs</span>
-                              </div>
+                              <span className="text-sm text-text-secondary">{formatDate(transaction.date)}</span>
+                            </td>
+                            <td className="text-right px-4 py-3">
+                              <span className="text-sm text-text-primary">{transaction.hours.toFixed(2)}</span>
+                            </td>
+                            <td className="text-right px-4 py-3">
+                              <span className="text-sm text-text-primary">{currencyFormatter.format(transaction.ratePerHour)}</span>
                             </td>
                             <td className="text-right px-4 py-3">
                               <span className="text-sm font-semibold text-purple-600">{currencyFormatter.format(transaction.totalUSD)}</span>
                             </td>
                             <td className="text-right px-4 py-3">
-                              <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(transaction.totalMXN)} MXN</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <span className="text-sm font-semibold text-purple-600">{percentage.toFixed(1)}%</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
                               <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 smooth-transition">
                                 <button
                                   onClick={() => {
-                                    // TODO: Add edit functionality for CFI transactions
+                                    setEditingItem({ type: 'flight-cfi', id: transaction.id })
+                                    setShowForm({ type: 'flight-cfi', visible: true })
                                   }}
-                                  className="text-text-tertiary hover:text-gradient-bluePurple text-xs px-2 py-1 rounded"
+                                  className="text-text-tertiary hover:text-blue-600 p-1.5 rounded transition-colors"
+                                  title="Edit transaction"
                                 >
-                                  Edit
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                  </svg>
                                 </button>
                                 <button
-                                  onClick={() => deleteCFI(transaction.id)}
-                                  className="text-text-tertiary hover:text-gradient-orangeRed text-xs px-2 py-1 rounded"
+                                  onClick={() => {
+                                    setDeleteConfirm({ show: true, transactionId: transaction.id, transactionType: 'flight-cfi' })
+                                  }}
+                                  className="text-text-tertiary hover:text-red-600 p-1.5 rounded transition-colors"
+                                  title="Delete transaction"
                                 >
-                                  ×
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
                                 </button>
                               </div>
                             </td>
@@ -1972,18 +2135,16 @@ export default function NetWorthTracker() {
                             })}
                             {/* Total Row */}
                             <tr className="bg-gradient-purple/10 font-semibold">
-                              <td className="px-4 py-3"></td>
                               <td className="px-4 py-3">
                                 <span className="text-sm text-text-primary">CFI Total</span>
                               </td>
+                              <td className="px-4 py-3"></td>
+                              <td className="text-right px-4 py-3">
+                                <span className="text-sm text-text-primary">{flightTrainingSummary.totalCFIHours.toFixed(2)}</span>
+                              </td>
+                              <td className="text-right px-4 py-3"></td>
                               <td className="text-right px-4 py-3">
                                 <span className="text-sm text-purple-600">{currencyFormatter.format(flightTrainingSummary.totalCFIUSD)}</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(flightTrainingSummary.totalCFIMXN)} MXN</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-purple-600">100.0%</span>
                               </td>
                               <td className="px-4 py-3"></td>
                             </tr>
@@ -1995,7 +2156,7 @@ export default function NetWorthTracker() {
                     {flightTrainingItemsPerPage !== 'all' && totalPages > 1 && (
                       <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-gradient-purple/20">
                         <div className="text-sm text-text-tertiary">
-                          Showing {startIndex + 1} to {Math.min(endIndex, cfiTransactions.length)} of {cfiTransactions.length} transactions
+                          Showing {startIndex + 1} to {Math.min(endIndex, sortedTransactions.length)} of {sortedTransactions.length} transactions
                         </div>
                         <div className="flex items-center gap-2">
                           <button
@@ -2057,155 +2218,224 @@ export default function NetWorthTracker() {
               })()}
 
               {/* Plane Rental Tab Content */}
-              {activeFlightTrainingTab === 'plane-rental' && planeRentalTransactions.length > 0 && (() => {
-                const itemsPerPage = flightTrainingItemsPerPage === 'all' ? planeRentalTransactions.length : flightTrainingItemsPerPage
-                const totalPages = Math.ceil(planeRentalTransactions.length / itemsPerPage)
+              {activeFlightTrainingTab === 'plane-rental' && (() => {
+                // Sort transactions by date (newest first)
+                const sortedTransactions = [...planeRentalTransactions].sort((a, b) => {
+                  const dateA = (a as any).date || (a as any).createdAt || ''
+                  const dateB = (b as any).date || (b as any).createdAt || ''
+                  // Compare dates as strings (YYYY-MM-DD format) - descending order (newest first)
+                  return dateB.localeCompare(dateA)
+                })
+                
+                const itemsPerPage = flightTrainingItemsPerPage === 'all' ? sortedTransactions.length : flightTrainingItemsPerPage
+                const totalPages = Math.ceil(sortedTransactions.length / itemsPerPage)
                 const startIndex = (flightTrainingPage - 1) * itemsPerPage
                 const endIndex = startIndex + itemsPerPage
-                const paginatedTransactions = planeRentalTransactions.slice(startIndex, endIndex)
+                const paginatedTransactions = sortedTransactions.slice(startIndex, endIndex)
                 
                 return (
                   <>
-                    <div className="panel overflow-hidden border border-gradient-purple/20">
-                      <div className="overflow-x-auto">
-                        <table className="w-full">
-                          <thead className="bg-gradient-purple/5 border-b border-gradient-purple/20">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-12">#</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">ASSET</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">TOTAL VALUE</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">MXN VALUE</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">%</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-20">ACTIONS</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gradient-purple/10">
-                            {paginatedTransactions.map((transaction, index) => {
-                        const planeRentalTotal = flightTrainingSummary.totalPlaneRentalUSD
-                        const percentage = planeRentalTotal > 0 ? (transaction.totalUSD / planeRentalTotal) * 100 : 0
-                        const transactionNumber = startIndex + index + 1
-                        
-                        return (
-                          <tr key={transaction.id} className="hover:bg-gradient-purple/5 smooth-transition group">
-                            <td className="px-4 py-3">
-                              <span className="text-sm font-semibold text-text-tertiary">{transactionNumber}</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex flex-col">
-                                <span className="text-sm font-semibold text-text-primary">{transaction.plate} • {transaction.concept}</span>
-                                <span className="text-xs text-text-tertiary">{transaction.hours.toFixed(2)} hrs • IDP: {transaction.idp.toFixed(2)}</span>
-                              </div>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <span className="text-sm font-semibold text-purple-600">{currencyFormatter.format(transaction.totalUSD)}</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(transaction.totalMXN)} MXN</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <span className="text-sm font-semibold text-purple-600">{percentage.toFixed(1)}%</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 smooth-transition">
-                                <button
-                                  onClick={() => {
-                                    // TODO: Add edit functionality for plane rental transactions
-                                  }}
-                                  className="text-text-tertiary hover:text-gradient-bluePurple text-xs px-2 py-1 rounded"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  onClick={() => deletePlaneRental(transaction.id)}
-                                  className="text-text-tertiary hover:text-gradient-orangeRed text-xs px-2 py-1 rounded"
-                                >
-                                  ×
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                            })}
-                            {/* Total Row */}
-                            <tr className="bg-gradient-purple/10 font-semibold">
-                              <td className="px-4 py-3"></td>
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-text-primary">Plane Rental Total</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-purple-600">{currencyFormatter.format(flightTrainingSummary.totalPlaneRentalUSD)}</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(flightTrainingSummary.totalPlaneRentalMXN)} MXN</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-purple-600">100.0%</span>
-                              </td>
-                              <td className="px-4 py-3"></td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                    {/* Pagination Controls */}
-                    {flightTrainingItemsPerPage !== 'all' && totalPages > 1 && (
-                      <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-gradient-purple/20">
-                        <div className="text-sm text-text-tertiary">
-                          Showing {startIndex + 1} to {Math.min(endIndex, planeRentalTransactions.length)} of {planeRentalTransactions.length} transactions
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setFlightTrainingPage(prev => Math.max(1, prev - 1))}
-                            disabled={flightTrainingPage === 1}
-                            className={`px-3 py-1 text-sm rounded border ${
-                              flightTrainingPage === 1
-                                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                                : 'border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
-                            }`}
-                          >
-                            Previous
-                          </button>
-                          <div className="flex items-center gap-1">
-                            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
-                              if (
-                                page === 1 ||
-                                page === totalPages ||
-                                (page >= flightTrainingPage - 1 && page <= flightTrainingPage + 1)
-                              ) {
-                                return (
-                                  <button
-                                    key={page}
-                                    onClick={() => setFlightTrainingPage(page)}
-                                    className={`px-3 py-1 text-sm rounded ${
-                                      flightTrainingPage === page
-                                        ? 'bg-gradient-purple text-white'
-                                        : 'border border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
-                                    }`}
-                                  >
-                                    {page}
-                                  </button>
-                                )
-                              } else if (
-                                page === flightTrainingPage - 2 ||
-                                page === flightTrainingPage + 2
-                              ) {
-                                return <span key={page} className="px-2 text-text-tertiary">...</span>
+                    {planeRentalTransactions.length > 0 ? (
+                      <>
+                        <div className="panel overflow-hidden border border-gradient-purple/20">
+                          <div className="overflow-x-auto">
+                            <table className="w-full">
+                              <thead className="bg-gradient-purple/5 border-b border-gradient-purple/20">
+                                <tr>
+                                  <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">AIRCRAFT</th>
+                                  <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">DATE</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">HOURS</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">RATE</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">IDP</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">TOTAL VALUE</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-24">ACTIONS</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gradient-purple/10">
+                                {paginatedTransactions.map((transaction, index) => {
+                          // Format date for display (avoid timezone issues by parsing YYYY-MM-DD directly)
+                          const formatDate = (dateString: string | undefined) => {
+                            if (!dateString) {
+                              // Try to get date from createdAt if available
+                              const createdAt = (transaction as any).createdAt
+                              if (createdAt) {
+                                try {
+                                  const date = new Date(createdAt)
+                                  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                                } catch {
+                                  return 'N/A'
+                                }
                               }
-                              return null
-                            })}
-                          </div>
-                          <button
-                            onClick={() => setFlightTrainingPage(prev => Math.min(totalPages, prev + 1))}
-                            disabled={flightTrainingPage === totalPages}
-                            className={`px-3 py-1 text-sm rounded border ${
-                              flightTrainingPage === totalPages
-                                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                                : 'border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
-                            }`}
-                          >
-                            Next
-                          </button>
+                              return 'N/A'
+                            }
+                            try {
+                              // If it's already in YYYY-MM-DD format, parse it directly to avoid timezone issues
+                              if (dateString.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                                const [year, month, day] = dateString.split('-')
+                                const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
+                                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                              }
+                              // Otherwise, try to parse as-is
+                              const date = new Date(dateString)
+                              // Check if date is valid
+                              if (isNaN(date.getTime())) {
+                                return dateString
+                              }
+                              return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                            } catch {
+                              return dateString
+                            }
+                          }
+                          
+                          // Calculate rate from total/hours if not available
+                          const rate = (transaction as any).rate || (transaction.hours > 0 ? transaction.totalUSD / transaction.hours : 0)
+                          const aircraft = transaction.plate || transaction.concept || 'Unknown'
+                          const date = (transaction as any).date || (transaction as any).createdAt
+                          
+                          return (
+                            <tr key={transaction.id} className="hover:bg-gradient-purple/5 smooth-transition group">
+                              <td className="px-4 py-3">
+                                <span className="text-sm font-semibold text-text-primary">{aircraft}</span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className="text-sm text-text-secondary">{formatDate(date)}</span>
+                              </td>
+                              <td className="text-right px-4 py-3">
+                                <span className="text-sm text-text-primary">{transaction.hours.toFixed(2)}</span>
+                              </td>
+                              <td className="text-right px-4 py-3">
+                                <span className="text-sm text-text-primary">{currencyFormatter.format(rate)}</span>
+                              </td>
+                              <td className="text-right px-4 py-3">
+                                <span className="text-sm text-text-primary">{transaction.idp.toFixed(2)}</span>
+                              </td>
+                              <td className="text-right px-4 py-3">
+                                <span className="text-sm font-semibold text-purple-600">{currencyFormatter.format(transaction.totalUSD)}</span>
+                              </td>
+                              <td className="text-right px-4 py-3">
+                                <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 smooth-transition">
+                                  <button
+                                    onClick={() => {
+                                      setEditingItem({ type: 'flight-plane-rental', id: transaction.id })
+                                      setShowForm({ type: 'flight-plane-rental', visible: true })
+                                    }}
+                                    className="text-text-tertiary hover:text-blue-600 p-1.5 rounded transition-colors"
+                                    title="Edit transaction"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                    </svg>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setDeleteConfirm({ show: true, transactionId: transaction.id, transactionType: 'flight-plane-rental' })
+                                    }}
+                                    className="text-text-tertiary hover:text-red-600 p-1.5 rounded transition-colors"
+                                    title="Delete transaction"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                              })}
+                              {/* Total Row */}
+                              <tr className="bg-gradient-purple/10 font-semibold">
+                                <td className="px-4 py-3">
+                                  <span className="text-sm text-text-primary">Plane Rental Total</span>
+                                </td>
+                                <td className="px-4 py-3"></td>
+                                <td className="text-right px-4 py-3">
+                                  <span className="text-sm text-text-primary">{flightTrainingSummary.totalPlaneRentalHours.toFixed(2)}</span>
+                                </td>
+                                <td className="text-right px-4 py-3"></td>
+                                <td className="text-right px-4 py-3"></td>
+                                <td className="text-right px-4 py-3">
+                                  <span className="text-sm text-purple-600">{currencyFormatter.format(flightTrainingSummary.totalPlaneRentalUSD)}</span>
+                                </td>
+                                <td className="px-4 py-3"></td>
+                              </tr>
+                            </tbody>
+                          </table>
                         </div>
+                      </div>
+                      {/* Pagination Controls */}
+                      {flightTrainingItemsPerPage !== 'all' && totalPages > 1 && (
+                        <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-gradient-purple/20">
+                          <div className="text-sm text-text-tertiary">
+                            Showing {startIndex + 1} to {Math.min(endIndex, sortedTransactions.length)} of {sortedTransactions.length} transactions
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setFlightTrainingPage(prev => Math.max(1, prev - 1))}
+                              disabled={flightTrainingPage === 1}
+                              className={`px-3 py-1 text-sm rounded border ${
+                                flightTrainingPage === 1
+                                  ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                  : 'border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
+                              }`}
+                            >
+                              Previous
+                            </button>
+                            <div className="flex items-center gap-1">
+                              {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                                if (
+                                  page === 1 ||
+                                  page === totalPages ||
+                                  (page >= flightTrainingPage - 1 && page <= flightTrainingPage + 1)
+                                ) {
+                                  return (
+                                    <button
+                                      key={page}
+                                      onClick={() => setFlightTrainingPage(page)}
+                                      className={`px-3 py-1 text-sm rounded ${
+                                        flightTrainingPage === page
+                                          ? 'bg-gradient-purple text-white'
+                                          : 'border border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
+                                      }`}
+                                    >
+                                      {page}
+                                    </button>
+                                  )
+                                } else if (
+                                  page === flightTrainingPage - 2 ||
+                                  page === flightTrainingPage + 2
+                                ) {
+                                  return <span key={page} className="px-2 text-text-tertiary">...</span>
+                                }
+                                return null
+                              })}
+                            </div>
+                            <button
+                              onClick={() => setFlightTrainingPage(prev => Math.min(totalPages, prev + 1))}
+                              disabled={flightTrainingPage === totalPages}
+                              className={`px-3 py-1 text-sm rounded border ${
+                                flightTrainingPage === totalPages
+                                  ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                  : 'border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
+                              }`}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      </>
+                    ) : (
+                      <div className="panel p-8 text-center bg-white/50 border border-dashed border-gradient-purple/30 rounded-xl">
+                        <p className="text-text-tertiary text-sm mb-3">No plane rental transactions</p>
+                        <button
+                          onClick={() => {
+                            setEditingItem({ type: 'flight-plane-rental', id: null })
+                            setShowForm({ type: 'flight-plane-rental', visible: true })
+                          }}
+                          className="px-4 py-2 text-sm font-medium rounded-xl border border-gradient-purple/20 bg-white/60 backdrop-blur-sm text-text-primary hover:border-gradient-purple/40 smooth-transition"
+                        >
+                          + Add Plane Rental Transaction
+                        </button>
                       </div>
                     )}
                   </>
@@ -2213,152 +2443,204 @@ export default function NetWorthTracker() {
               })()}
 
               {/* Others (Extras) Tab Content */}
-              {activeFlightTrainingTab === 'others' && extrasTransactions.length > 0 && (() => {
-                const itemsPerPage = flightTrainingItemsPerPage === 'all' ? extrasTransactions.length : flightTrainingItemsPerPage
-                const totalPages = Math.ceil(extrasTransactions.length / itemsPerPage)
+              {activeFlightTrainingTab === 'others' && (() => {
+                // Sort transactions by date (newest first)
+                const sortedTransactions = [...extrasTransactions].sort((a, b) => {
+                  const dateA = (a as any).date || (a as any).createdAt || ''
+                  const dateB = (b as any).date || (b as any).createdAt || ''
+                  // Compare dates as strings (YYYY-MM-DD format) - descending order (newest first)
+                  return dateB.localeCompare(dateA)
+                })
+                
+                const itemsPerPage = flightTrainingItemsPerPage === 'all' ? sortedTransactions.length : flightTrainingItemsPerPage
+                const totalPages = Math.ceil(sortedTransactions.length / itemsPerPage)
                 const startIndex = (flightTrainingPage - 1) * itemsPerPage
                 const endIndex = startIndex + itemsPerPage
-                const paginatedTransactions = extrasTransactions.slice(startIndex, endIndex)
+                const paginatedTransactions = sortedTransactions.slice(startIndex, endIndex)
                 
                 return (
                   <>
-                    <div className="panel overflow-hidden border border-gradient-purple/20">
-                      <div className="overflow-x-auto">
-                        <table className="w-full">
-                          <thead className="bg-gradient-purple/5 border-b border-gradient-purple/20">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-12">#</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">ASSET</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">TOTAL VALUE</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">MXN VALUE</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">%</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-20">ACTIONS</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gradient-purple/10">
-                            {paginatedTransactions.map((transaction, index) => {
-                        const extrasTotal = flightTrainingSummary.totalExtrasUSD
-                        const percentage = extrasTotal > 0 ? (transaction.totalUSD / extrasTotal) * 100 : 0
-                        const transactionNumber = startIndex + index + 1
-                        
-                        return (
-                          <tr key={transaction.id} className="hover:bg-gradient-purple/5 smooth-transition group">
-                            <td className="px-4 py-3">
-                              <span className="text-sm font-semibold text-text-tertiary">{transactionNumber}</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className="text-sm font-semibold text-text-primary">{transaction.concept}</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <span className="text-sm font-semibold text-purple-600">{currencyFormatter.format(transaction.totalUSD)}</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(transaction.totalMXN)} MXN</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <span className="text-sm font-semibold text-purple-600">{percentage.toFixed(1)}%</span>
-                            </td>
-                            <td className="text-right px-4 py-3">
-                              <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 smooth-transition">
-                                <button
-                                  onClick={() => {
-                                    // TODO: Add edit functionality for extras transactions
-                                  }}
-                                  className="text-text-tertiary hover:text-gradient-bluePurple text-xs px-2 py-1 rounded"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  onClick={() => deleteExtras(transaction.id)}
-                                  className="text-text-tertiary hover:text-gradient-orangeRed text-xs px-2 py-1 rounded"
-                                >
-                                  ×
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                            })}
-                            {/* Total Row */}
-                            <tr className="bg-gradient-purple/10 font-semibold">
-                              <td className="px-4 py-3"></td>
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-text-primary">Extras Total</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-purple-600">{currencyFormatter.format(flightTrainingSummary.totalExtrasUSD)}</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(flightTrainingSummary.totalExtrasMXN)} MXN</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-purple-600">100.0%</span>
-                              </td>
-                              <td className="px-4 py-3"></td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                    {/* Pagination Controls */}
-                    {flightTrainingItemsPerPage !== 'all' && totalPages > 1 && (
-                      <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-gradient-purple/20">
-                        <div className="text-sm text-text-tertiary">
-                          Showing {startIndex + 1} to {Math.min(endIndex, extrasTransactions.length)} of {extrasTransactions.length} transactions
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setFlightTrainingPage(prev => Math.max(1, prev - 1))}
-                            disabled={flightTrainingPage === 1}
-                            className={`px-3 py-1 text-sm rounded border ${
-                              flightTrainingPage === 1
-                                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                                : 'border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
-                            }`}
-                          >
-                            Previous
-                          </button>
-                          <div className="flex items-center gap-1">
-                            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
-                              if (
-                                page === 1 ||
-                                page === totalPages ||
-                                (page >= flightTrainingPage - 1 && page <= flightTrainingPage + 1)
-                              ) {
-                                return (
-                                  <button
-                                    key={page}
-                                    onClick={() => setFlightTrainingPage(page)}
-                                    className={`px-3 py-1 text-sm rounded ${
-                                      flightTrainingPage === page
-                                        ? 'bg-gradient-purple text-white'
-                                        : 'border border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
-                                    }`}
-                                  >
-                                    {page}
-                                  </button>
-                                )
-                              } else if (
-                                page === flightTrainingPage - 2 ||
-                                page === flightTrainingPage + 2
-                              ) {
-                                return <span key={page} className="px-2 text-text-tertiary">...</span>
+                    {extrasTransactions.length > 0 ? (
+                      <>
+                        <div className="panel overflow-hidden border border-gradient-purple/20">
+                          <div className="overflow-x-auto">
+                            <table className="w-full">
+                              <thead className="bg-gradient-purple/5 border-b border-gradient-purple/20">
+                                <tr>
+                                  <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">CONCEPT</th>
+                                  <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">DATE</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">TOTAL VALUE</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-24">ACTIONS</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gradient-purple/10">
+                                {paginatedTransactions.map((transaction, index) => {
+                          // Format date for display (avoid timezone issues by parsing YYYY-MM-DD directly)
+                          const formatDate = (dateString: string | undefined) => {
+                            if (!dateString) {
+                              // Try to get date from createdAt if available
+                              const createdAt = (transaction as any).createdAt
+                              if (createdAt) {
+                                try {
+                                  const date = new Date(createdAt)
+                                  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                                } catch {
+                                  return 'N/A'
+                                }
                               }
-                              return null
-                            })}
-                          </div>
-                          <button
-                            onClick={() => setFlightTrainingPage(prev => Math.min(totalPages, prev + 1))}
-                            disabled={flightTrainingPage === totalPages}
-                            className={`px-3 py-1 text-sm rounded border ${
-                              flightTrainingPage === totalPages
-                                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                                : 'border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
-                            }`}
-                          >
-                            Next
-                          </button>
+                              return 'N/A'
+                            }
+                            try {
+                              // If it's already in YYYY-MM-DD format, parse it directly to avoid timezone issues
+                              if (dateString.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                                const [year, month, day] = dateString.split('-')
+                                const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
+                                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                              }
+                              // Otherwise, try to parse as-is
+                              const date = new Date(dateString)
+                              // Check if date is valid
+                              if (isNaN(date.getTime())) {
+                                return dateString
+                              }
+                              return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                            } catch {
+                              return dateString
+                            }
+                          }
+                          
+                          const date = (transaction as any).date || (transaction as any).createdAt
+                          
+                          return (
+                            <tr key={transaction.id} className="hover:bg-gradient-purple/5 smooth-transition group">
+                              <td className="px-4 py-3">
+                                <span className="text-sm font-semibold text-text-primary">{transaction.concept}</span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className="text-sm text-text-secondary">{formatDate(date)}</span>
+                              </td>
+                              <td className="text-right px-4 py-3">
+                                <span className="text-sm font-semibold text-purple-600">{currencyFormatter.format(transaction.totalUSD)}</span>
+                              </td>
+                              <td className="text-right px-4 py-3">
+                                <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 smooth-transition">
+                                  <button
+                                    onClick={() => {
+                                      setEditingItem({ type: 'flight-others', id: transaction.id })
+                                      setShowForm({ type: 'flight-others', visible: true })
+                                    }}
+                                    className="text-text-tertiary hover:text-blue-600 p-1.5 rounded transition-colors"
+                                    title="Edit transaction"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                    </svg>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setDeleteConfirm({ show: true, transactionId: transaction.id, transactionType: 'flight-others' })
+                                    }}
+                                    className="text-text-tertiary hover:text-red-600 p-1.5 rounded transition-colors"
+                                    title="Delete transaction"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                              })}
+                              {/* Total Row */}
+                              <tr className="bg-gradient-purple/10 font-semibold">
+                                <td className="px-4 py-3">
+                                  <span className="text-sm text-text-primary">Extras Total</span>
+                                </td>
+                                <td className="px-4 py-3"></td>
+                                <td className="text-right px-4 py-3">
+                                  <span className="text-sm text-purple-600">{currencyFormatter.format(flightTrainingSummary.totalExtrasUSD)}</span>
+                                </td>
+                                <td className="px-4 py-3"></td>
+                              </tr>
+                            </tbody>
+                          </table>
                         </div>
+                      </div>
+                      {/* Pagination Controls */}
+                      {flightTrainingItemsPerPage !== 'all' && totalPages > 1 && (
+                        <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-gradient-purple/20">
+                          <div className="text-sm text-text-tertiary">
+                            Showing {startIndex + 1} to {Math.min(endIndex, sortedTransactions.length)} of {sortedTransactions.length} transactions
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setFlightTrainingPage(prev => Math.max(1, prev - 1))}
+                              disabled={flightTrainingPage === 1}
+                              className={`px-3 py-1 text-sm rounded border ${
+                                flightTrainingPage === 1
+                                  ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                  : 'border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
+                              }`}
+                            >
+                              Previous
+                            </button>
+                            <div className="flex items-center gap-1">
+                              {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                                if (
+                                  page === 1 ||
+                                  page === totalPages ||
+                                  (page >= flightTrainingPage - 1 && page <= flightTrainingPage + 1)
+                                ) {
+                                  return (
+                                    <button
+                                      key={page}
+                                      onClick={() => setFlightTrainingPage(page)}
+                                      className={`px-3 py-1 text-sm rounded ${
+                                        flightTrainingPage === page
+                                          ? 'bg-gradient-purple text-white'
+                                          : 'border border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
+                                      }`}
+                                    >
+                                      {page}
+                                    </button>
+                                  )
+                                } else if (
+                                  page === flightTrainingPage - 2 ||
+                                  page === flightTrainingPage + 2
+                                ) {
+                                  return <span key={page} className="px-2 text-text-tertiary">...</span>
+                                }
+                                return null
+                              })}
+                            </div>
+                            <button
+                              onClick={() => setFlightTrainingPage(prev => Math.min(totalPages, prev + 1))}
+                              disabled={flightTrainingPage === totalPages}
+                              className={`px-3 py-1 text-sm rounded border ${
+                                flightTrainingPage === totalPages
+                                  ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                  : 'border-gradient-purple/20 text-text-primary hover:bg-gradient-purple/5'
+                              }`}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      </>
+                    ) : (
+                      <div className="panel p-8 text-center bg-white/50 border border-dashed border-gradient-purple/30 rounded-xl">
+                        <p className="text-text-tertiary text-sm mb-3">No extras transactions</p>
+                        <button
+                          onClick={() => {
+                            setEditingItem({ type: 'flight-others', id: null })
+                            setShowForm({ type: 'flight-others', visible: true })
+                          }}
+                          className="px-4 py-2 text-sm font-medium rounded-xl border border-gradient-purple/20 bg-white/60 backdrop-blur-sm text-text-primary hover:border-gradient-purple/40 smooth-transition"
+                        >
+                          + Add Extra Transaction
+                        </button>
                       </div>
                     )}
                   </>
@@ -2366,7 +2648,7 @@ export default function NetWorthTracker() {
               })()}
 
               {/* Income Tab Content */}
-              {activeFlightTrainingTab === 'income' && incomeTransactions.length > 0 && (() => {
+              {activeFlightTrainingTab === 'income' && (() => {
                 const itemsPerPage = flightTrainingItemsPerPage === 'all' ? incomeTransactions.length : flightTrainingItemsPerPage
                 const totalPages = Math.ceil(incomeTransactions.length / itemsPerPage)
                 const startIndex = (flightTrainingPage - 1) * itemsPerPage
@@ -2375,23 +2657,21 @@ export default function NetWorthTracker() {
                 
                 return (
                   <>
-                    <div className="panel overflow-hidden border border-gradient-green/20">
-                      <div className="overflow-x-auto">
-                        <table className="w-full">
-                          <thead className="bg-gradient-green/5 border-b border-gradient-green/20">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-12">#</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">ASSET</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">TOTAL VALUE</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">MXN VALUE</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">%</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-20">ACTIONS</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gradient-green/10">
-                            {paginatedTransactions.map((transaction, index) => {
-                          const incomeTotal = flightTrainingSummary.totalIncomeUSD
-                          const percentage = incomeTotal > 0 ? (transaction.totalUSD / incomeTotal) * 100 : 0
+                    {incomeTransactions.length > 0 ? (
+                      <>
+                        <div className="panel overflow-hidden border border-gradient-green/20">
+                          <div className="overflow-x-auto">
+                            <table className="w-full">
+                              <thead className="bg-gradient-green/5 border-b border-gradient-green/20">
+                                <tr>
+                                  <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-12">#</th>
+                                  <th className="text-left px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">ASSET</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider">TOTAL VALUE</th>
+                                  <th className="text-right px-4 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wider w-20">ACTIONS</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gradient-green/10">
+                                {paginatedTransactions.map((transaction, index) => {
                           const transactionNumber = startIndex + index + 1
                           
                           return (
@@ -2406,16 +2686,11 @@ export default function NetWorthTracker() {
                                 <span className="text-sm font-semibold text-green-600">{currencyFormatter.format(transaction.totalUSD)}</span>
                               </td>
                               <td className="text-right px-4 py-3">
-                                <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(transaction.totalMXN)} MXN</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm font-semibold text-green-600">{percentage.toFixed(1)}%</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
                                 <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 smooth-transition">
                                   <button
                                     onClick={() => {
-                                      // TODO: Add edit functionality for income transactions
+                                      setEditingItem({ type: 'flight-income', id: transaction.id })
+                                      setShowForm({ type: 'flight-income', visible: true })
                                     }}
                                     className="text-text-tertiary hover:text-gradient-bluePurple text-xs px-2 py-1 rounded"
                                   >
@@ -2431,30 +2706,100 @@ export default function NetWorthTracker() {
                               </td>
                             </tr>
                           )
-                            })}
-                            {/* Total Row */}
-                            <tr className="bg-gradient-green/10 font-semibold">
-                              <td className="px-4 py-3"></td>
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-text-primary">Income Total</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-green-600">{currencyFormatter.format(flightTrainingSummary.totalIncomeUSD)}</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-text-secondary">{currencyFormatterMXN.format(flightTrainingSummary.totalIncomeMXN)} MXN</span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className="text-sm text-green-600">100.0%</span>
-                              </td>
-                              <td className="px-4 py-3"></td>
-                            </tr>
-                          </tbody>
-                        </table>
+                              })}
+                              {/* Total Row */}
+                              <tr className="bg-gradient-green/10 font-semibold">
+                                <td className="px-4 py-3"></td>
+                                <td className="px-4 py-3">
+                                  <span className="text-sm text-text-primary">Income Total</span>
+                                </td>
+                                <td className="text-right px-4 py-3">
+                                  <span className="text-sm text-green-600">{currencyFormatter.format(flightTrainingSummary.totalIncomeUSD)}</span>
+                                </td>
+                                <td className="px-4 py-3"></td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                    </div>
+                      {/* Pagination Controls */}
+                      {flightTrainingItemsPerPage !== 'all' && totalPages > 1 && (
+                        <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-gradient-green/20">
+                          <div className="text-sm text-text-tertiary">
+                            Showing {startIndex + 1} to {Math.min(endIndex, incomeTransactions.length)} of {incomeTransactions.length} transactions
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setFlightTrainingPage(prev => Math.max(1, prev - 1))}
+                              disabled={flightTrainingPage === 1}
+                              className={`px-3 py-1 text-sm rounded border ${
+                                flightTrainingPage === 1
+                                  ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                  : 'border-gradient-green/20 text-text-primary hover:bg-gradient-green/5'
+                              }`}
+                            >
+                              Previous
+                            </button>
+                            <div className="flex items-center gap-1">
+                              {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                                if (
+                                  page === 1 ||
+                                  page === totalPages ||
+                                  (page >= flightTrainingPage - 1 && page <= flightTrainingPage + 1)
+                                ) {
+                                  return (
+                                    <button
+                                      key={page}
+                                      onClick={() => setFlightTrainingPage(page)}
+                                      className={`px-3 py-1 text-sm rounded ${
+                                        flightTrainingPage === page
+                                          ? 'bg-gradient-green text-white'
+                                          : 'border border-gradient-green/20 text-text-primary hover:bg-gradient-green/5'
+                                      }`}
+                                    >
+                                      {page}
+                                    </button>
+                                  )
+                                } else if (
+                                  page === flightTrainingPage - 2 ||
+                                  page === flightTrainingPage + 2
+                                ) {
+                                  return <span key={page} className="px-2 text-text-tertiary">...</span>
+                                }
+                                return null
+                              })}
+                            </div>
+                            <button
+                              onClick={() => setFlightTrainingPage(prev => Math.min(totalPages, prev + 1))}
+                              disabled={flightTrainingPage === totalPages}
+                              className={`px-3 py-1 text-sm rounded border ${
+                                flightTrainingPage === totalPages
+                                  ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                  : 'border-gradient-green/20 text-text-primary hover:bg-gradient-green/5'
+                              }`}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      </>
+                    ) : (
+                      <div className="panel p-8 text-center bg-white/50 border border-dashed border-green-300/30 rounded-xl">
+                        <p className="text-text-tertiary text-sm mb-3">No income transactions</p>
+                        <button
+                          onClick={() => {
+                            setEditingItem({ type: 'flight-income', id: null })
+                            setShowForm({ type: 'flight-income', visible: true })
+                          }}
+                          className="px-4 py-2 text-sm font-medium rounded-xl border border-green-300/20 bg-white/60 backdrop-blur-sm text-text-primary hover:border-green-400/40 smooth-transition"
+                        >
+                          + Add Income Transaction
+                        </button>
+                      </div>
+                    )}
                     {/* Pagination Controls */}
-                    {flightTrainingItemsPerPage !== 'all' && totalPages > 1 && (
+                    {incomeTransactions.length > 0 && flightTrainingItemsPerPage !== 'all' && totalPages > 1 && (
                       <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-gradient-green/20">
                         <div className="text-sm text-text-tertiary">
                           Showing {startIndex + 1} to {Math.min(endIndex, incomeTransactions.length)} of {incomeTransactions.length} transactions
@@ -2517,26 +2862,7 @@ export default function NetWorthTracker() {
                   </>
                 )
               })()}
-
-              {/* Empty State for Active Tab */}
-              {((activeFlightTrainingTab === 'cfi' && cfiTransactions.length === 0) ||
-                (activeFlightTrainingTab === 'plane-rental' && planeRentalTransactions.length === 0) ||
-                (activeFlightTrainingTab === 'others' && extrasTransactions.length === 0) ||
-                (activeFlightTrainingTab === 'income' && incomeTransactions.length === 0)) && (
-                <div className="panel p-12 text-center border border-gradient-purple/20">
-                  <p className="text-text-tertiary text-sm mb-4">
-                    No {activeFlightTrainingTab === 'others' ? 'extras' : activeFlightTrainingTab === 'plane-rental' ? 'plane rental' : activeFlightTrainingTab} transactions recorded
-                  </p>
-                </div>
-              )}
             </div>
-          )}
-
-          {cfiTransactions.length === 0 && planeRentalTransactions.length === 0 && extrasTransactions.length === 0 && incomeTransactions.length === 0 && (
-            <div className="panel p-12 text-center">
-              <p className="text-text-tertiary text-sm mb-4">No flight training transactions recorded</p>
-            </div>
-          )}
         </div>
       )}
 
@@ -2674,23 +3000,18 @@ export default function NetWorthTracker() {
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold text-lg">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                                <p className="text-xs text-text-secondary">{name}</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(245, 158, 11, 0.3)",
-                            borderRadius: "16px",
-                            padding: "16px",
-                            boxShadow: "0 12px 32px rgba(0, 0, 0, 0.15)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-amber-500/30 rounded-2xl p-4 shadow-xl space-y-1">
+                                  <p className="font-bold text-lg text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                  <p className="text-xs text-text-secondary">{data.name}</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                       </PieChart>
@@ -2739,22 +3060,17 @@ export default function NetWorthTracker() {
                           tickFormatter={(value) => `$${(value / 1000).toFixed(1)}k`}
                         />
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(245, 158, 11, 0.3)",
-                            borderRadius: "12px",
-                            padding: "12px",
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.1)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-amber-500/30 rounded-xl p-3 shadow-lg space-y-1">
+                                  <p className="font-bold text-text-primary">{currencyFormatter.format(data.value)}</p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                         <Bar 
@@ -3013,53 +3329,83 @@ export default function NetWorthTracker() {
               Net Worth Calculations
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Calculation 1: Savings - Debt + Flight Training */}
+              {/* Calculation 1: Savings + Debt + Flight Training */}
               {(() => {
-                const calcUSD = summary.totalSavingsUSD - Math.abs(summary.netDebtUSD) + flightTrainingUSD
-                const calcMXN = summary.totalSavingsMXN - Math.abs(summary.netDebtMXN) + flightTrainingMXN
+                const calcUSD = summary.totalSavingsUSD + adjustedNetDebtUSD + flightTrainingSummaryUSD // Inverted for summary
+                const calcMXN = summary.totalSavingsMXN + adjustedNetDebtMXN + flightTrainingSummaryMXN // Inverted for summary
+                const isNegative = calcUSD < 0
                 return (
-                  <div className="panel p-6 bg-gradient-to-br from-gradient-deepBlue/10 via-gradient-bluePurple/5 to-gradient-orange/5 border-2 border-gradient-deepBlue/20">
-                    <p className="text-xs text-text-tertiary uppercase tracking-wider mb-2">Savings - Debt + Flight Training</p>
-                    <h2 className={`text-3xl font-bold mb-1 ${calcUSD < 0 ? 'text-red-600' : 'text-text-primary'}`}>
+                  <div className="relative overflow-hidden panel p-6 bg-gradient-to-br from-white via-gradient-deepBlue/5 to-gradient-bluePurple/5 border-2 border-gradient-deepBlue/20 hover:border-gradient-deepBlue/40 smooth-transition group">
+                    {/* Decorative accent */}
+                    <div className={`absolute top-0 left-0 w-1 h-full ${isNegative ? 'bg-gradient-to-b from-red-500 to-red-600' : 'bg-gradient-to-b from-green-500 to-green-600'}`}></div>
+                    <div className="relative z-10">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs font-semibold text-text-tertiary uppercase tracking-wider">Savings + Debt + Flight Training</p>
+                        <div className={`w-2 h-2 rounded-full ${isNegative ? 'bg-red-500' : 'bg-green-500'}`}></div>
+                      </div>
+                      <h2 className={`text-3xl font-bold mb-2 ${isNegative ? 'text-red-600' : 'text-green-600'}`}>
                       {currencyFormatter.format(calcUSD)}
                     </h2>
-                    <p className={`text-sm ${calcMXN < 0 ? 'text-red-600' : 'text-text-secondary'}`}>
+                      <div className="flex items-center gap-2">
+                        <p className={`text-sm font-medium ${isNegative ? 'text-red-500' : 'text-text-secondary'}`}>
                       {currencyFormatterMXN.format(calcMXN)} MXN
                     </p>
+                      </div>
+                    </div>
                   </div>
                 )
               })()}
               
-              {/* Calculation 2: Savings - Debt + Investments + Flight Training */}
+              {/* Calculation 2: Savings + Debt + Investments + Flight Training */}
               {(() => {
-                const calcUSD = summary.totalSavingsUSD - Math.abs(summary.netDebtUSD) + summary.totalInvestmentsUSD + flightTrainingUSD
-                const calcMXN = summary.totalSavingsMXN - Math.abs(summary.netDebtMXN) + summary.totalInvestmentsMXN + flightTrainingMXN
+                const calcUSD = summary.totalSavingsUSD + adjustedNetDebtUSD + totalNon401kInvestmentsUSD + flightTrainingSummaryUSD // Inverted for summary
+                const calcMXN = summary.totalSavingsMXN + adjustedNetDebtMXN + totalNon401kInvestmentsMXN + flightTrainingSummaryMXN // Inverted for summary
+                const isNegative = calcUSD < 0
                 return (
-                  <div className="panel p-6 bg-gradient-to-br from-gradient-deepBlue/10 via-gradient-bluePurple/5 to-gradient-orange/5 border-2 border-gradient-deepBlue/20">
-                    <p className="text-xs text-text-tertiary uppercase tracking-wider mb-2">Savings - Debt + Investments + Flight Training</p>
-                    <h2 className={`text-3xl font-bold mb-1 ${calcUSD < 0 ? 'text-red-600' : 'text-text-primary'}`}>
+                  <div className="relative overflow-hidden panel p-6 bg-gradient-to-br from-white via-gradient-bluePurple/5 to-gradient-orange/5 border-2 border-gradient-bluePurple/20 hover:border-gradient-bluePurple/40 smooth-transition group">
+                    {/* Decorative accent */}
+                    <div className={`absolute top-0 left-0 w-1 h-full ${isNegative ? 'bg-gradient-to-b from-red-500 to-red-600' : 'bg-gradient-to-b from-green-500 to-green-600'}`}></div>
+                    <div className="relative z-10">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs font-semibold text-text-tertiary uppercase tracking-wider">Savings + Debt + Investments + Flight Training</p>
+                        <div className={`w-2 h-2 rounded-full ${isNegative ? 'bg-red-500' : 'bg-green-500'}`}></div>
+                      </div>
+                      <h2 className={`text-3xl font-bold mb-2 ${isNegative ? 'text-red-600' : 'text-green-600'}`}>
                       {currencyFormatter.format(calcUSD)}
                     </h2>
-                    <p className={`text-sm ${calcMXN < 0 ? 'text-red-600' : 'text-text-secondary'}`}>
+                      <div className="flex items-center gap-2">
+                        <p className={`text-sm font-medium ${isNegative ? 'text-red-500' : 'text-text-secondary'}`}>
                       {currencyFormatterMXN.format(calcMXN)} MXN
                     </p>
+                      </div>
+                    </div>
                   </div>
                 )
               })()}
               
-              {/* Calculation 3: Savings - Debt + Investments + Flight Training + Retirement */}
+              {/* Calculation 3: Savings + Debt + Investments + Flight Training + Retirement */}
               {(() => {
-                const calcUSD = summary.totalSavingsUSD - Math.abs(summary.netDebtUSD) + summary.totalInvestmentsUSD + flightTrainingUSD + summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)
-                const calcMXN = summary.totalSavingsMXN - Math.abs(summary.netDebtMXN) + summary.totalInvestmentsMXN + flightTrainingMXN + summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0)
+                const calcUSD = summary.totalSavingsUSD + adjustedNetDebtUSD + totalNon401kInvestmentsUSD + flightTrainingSummaryUSD + summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0) // Inverted for summary
+                const calcMXN = summary.totalSavingsMXN + adjustedNetDebtMXN + totalNon401kInvestmentsMXN + flightTrainingSummaryMXN + summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0) // Inverted for summary
+                const isNegative = calcUSD < 0
                 return (
-                  <div className="panel p-6 bg-gradient-to-br from-gradient-deepBlue/10 via-gradient-bluePurple/5 to-gradient-orange/5 border-2 border-gradient-deepBlue/20">
-                    <p className="text-xs text-text-tertiary uppercase tracking-wider mb-2">Savings - Debt + Investments + Flight Training + Retirement</p>
-                    <h2 className={`text-3xl font-bold mb-1 ${calcUSD < 0 ? 'text-red-600' : 'text-text-primary'}`}>
+                  <div className="relative overflow-hidden panel p-6 bg-gradient-to-br from-white via-gradient-orange/5 to-gradient-yellowOrange/5 border-2 border-gradient-orange/20 hover:border-gradient-orange/40 smooth-transition group">
+                    {/* Decorative accent */}
+                    <div className={`absolute top-0 left-0 w-1 h-full ${isNegative ? 'bg-gradient-to-b from-red-500 to-red-600' : 'bg-gradient-to-b from-green-500 to-green-600'}`}></div>
+                    <div className="relative z-10">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs font-semibold text-text-tertiary uppercase tracking-wider">Savings + Debt + Investments + Flight Training + Retirement</p>
+                        <div className={`w-2 h-2 rounded-full ${isNegative ? 'bg-red-500' : 'bg-green-500'}`}></div>
+                      </div>
+                      <h2 className={`text-3xl font-bold mb-2 ${isNegative ? 'text-red-600' : 'text-green-600'}`}>
                       {currencyFormatter.format(calcUSD)}
                     </h2>
-                    <p className={`text-sm ${calcMXN < 0 ? 'text-red-600' : 'text-text-secondary'}`}>
+                      <div className="flex items-center gap-2">
+                        <p className={`text-sm font-medium ${isNegative ? 'text-red-500' : 'text-text-secondary'}`}>
                       {currencyFormatterMXN.format(calcMXN)} MXN
                     </p>
+                      </div>
+                    </div>
                   </div>
                 )
               })()}
@@ -3093,20 +3439,20 @@ export default function NetWorthTracker() {
                       },
                       { 
                         name: 'Investments', 
-                        value: summary.totalInvestmentsUSD, 
-                        mxn: summary.totalInvestmentsMXN,
+                        value: totalNon401kInvestmentsUSD, 
+                        mxn: totalNon401kInvestmentsMXN,
                         color: 'blue'
                       },
                       { 
                         name: 'Debt', 
-                        value: -Math.abs(summary.netDebtUSD), 
-                        mxn: -Math.abs(summary.netDebtMXN),
-                        color: 'red'
+                        value: adjustedNetDebtUSD, 
+                        mxn: adjustedNetDebtMXN,
+                        color: adjustedNetDebtUSD < 0 ? 'red' : 'green'
                       },
                       { 
                         name: 'Flight Training', 
-                        value: flightTrainingUSD, 
-                        mxn: flightTrainingMXN,
+                        value: flightTrainingSummaryUSD, // Inverted: negative becomes positive, positive becomes negative
+                        mxn: flightTrainingSummaryMXN,
                         color: 'purple'
                       },
                       { 
@@ -3118,11 +3464,12 @@ export default function NetWorthTracker() {
                     ].map((asset) => {
                       const totalSelectedAssets = [
                         selectedAssets['Savings'] ? Math.abs(summary.totalSavingsUSD) : 0,
-                        selectedAssets['Investments'] ? Math.abs(summary.totalInvestmentsUSD) : 0,
-                        selectedAssets['Debt'] ? Math.abs(summary.netDebtUSD) : 0,
-                        selectedAssets['Flight Training'] ? Math.abs(flightTrainingUSD) : 0,
+                        selectedAssets['Investments'] ? Math.abs(totalNon401kInvestmentsUSD) : 0,
+                        selectedAssets['Debt'] ? Math.abs(adjustedNetDebtUSD) : 0,
+                        selectedAssets['Flight Training'] ? Math.abs(flightTrainingSummaryUSD) : 0, // Inverted for summary
                         selectedAssets['Retirement'] ? Math.abs(summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)) : 0,
                       ].reduce((sum, val) => sum + val, 0)
+                      // For percentage calculation, use absolute value but keep the actual value for display
                       const percentage = totalSelectedAssets > 0 ? (Math.abs(asset.value) / totalSelectedAssets) * 100 : 0
                       const isSelected = selectedAssets[asset.name] ?? true
                       
@@ -3153,7 +3500,6 @@ export default function NetWorthTracker() {
                                     ? `radial-gradient(circle, white 35%, ${circleColor} 35%, ${circleColor} 100%)` 
                                     : 'none',
                                   backgroundColor: isSelected ? circleColor : 'transparent',
-                                  focusRingColor: circleColor
                                 }}
                               />
                               <span className="text-sm font-semibold text-text-primary uppercase">{asset.name}</span>
@@ -3161,14 +3507,14 @@ export default function NetWorthTracker() {
                           </td>
                           <td className="text-right px-4 py-3">
                             <span className={`text-sm font-semibold ${
-                              asset.value < 0 ? 'text-red-600' : 'text-text-primary'
+                              asset.value < 0 ? 'text-red-600' : asset.color === 'green' ? 'text-green-600' : 'text-text-primary'
                             }`}>
                               {currencyFormatter.format(asset.value)}
                             </span>
                           </td>
                           <td className="text-right px-4 py-3">
                             <span className={`text-sm ${
-                              asset.mxn < 0 ? 'text-red-600' : 'text-text-secondary'
+                              asset.mxn < 0 ? 'text-red-600' : asset.color === 'green' ? 'text-green-600' : 'text-text-secondary'
                             }`}>
                               {currencyFormatterMXN.format(asset.mxn)} MXN
                             </span>
@@ -3197,10 +3543,10 @@ export default function NetWorthTracker() {
                         <span className="text-sm text-text-primary">
                           {currencyFormatter.format(
                             (selectedAssets['Savings'] ? summary.totalSavingsUSD : 0) +
-                            (selectedAssets['Investments'] ? summary.totalInvestmentsUSD : 0) +
+                            (selectedAssets['Investments'] ? totalNon401kInvestmentsUSD : 0) +
                             (selectedAssets['Retirement'] ? summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0) : 0) +
-                            (selectedAssets['Flight Training'] ? flightTrainingUSD : 0) +
-                            (selectedAssets['Debt'] ? -Math.abs(summary.netDebtUSD) : 0)
+                            (selectedAssets['Flight Training'] ? flightTrainingSummaryUSD : 0) + // Inverted for summary
+                            (selectedAssets['Debt'] ? adjustedNetDebtUSD : 0)
                           )}
                         </span>
                       </td>
@@ -3208,10 +3554,10 @@ export default function NetWorthTracker() {
                         <span className="text-sm text-text-secondary">
                           {currencyFormatterMXN.format(
                             (selectedAssets['Savings'] ? summary.totalSavingsMXN : 0) +
-                            (selectedAssets['Investments'] ? summary.totalInvestmentsMXN : 0) +
+                            (selectedAssets['Investments'] ? totalNon401kInvestmentsMXN : 0) +
                             (selectedAssets['Retirement'] ? summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0) : 0) +
-                            (selectedAssets['Flight Training'] ? flightTrainingMXN : 0) +
-                            (selectedAssets['Debt'] ? -Math.abs(summary.netDebtMXN) : 0)
+                            (selectedAssets['Flight Training'] ? flightTrainingSummaryMXN : 0) + // Inverted for summary
+                            (selectedAssets['Debt'] ? adjustedNetDebtMXN : 0)
                           )} MXN
                         </span>
                       </td>
@@ -3226,7 +3572,7 @@ export default function NetWorthTracker() {
           </div>
 
           {/* Asset Breakdown Chart - Enhanced */}
-          {(summary.totalSavingsUSD > 0 || summary.totalInvestmentsUSD > 0 || (summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)) > 0) && (
+          {(summary.totalSavingsUSD > 0 || totalNon401kInvestmentsUSD > 0 || (summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)) > 0) && (
             <div className="panel p-8 bg-gradient-to-br from-white via-gradient-deepBlue/5 to-gradient-orange/5 border-2 border-gradient-deepBlue/20 relative overflow-hidden">
               {/* Decorative background elements */}
               <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-deepBlue/5 rounded-full blur-3xl -mr-32 -mt-32"></div>
@@ -3246,19 +3592,19 @@ export default function NetWorthTracker() {
                     <p className="text-lg font-bold text-text-primary">
                       {currencyFormatter.format(
                         (selectedAssets['Savings'] ? summary.totalSavingsUSD : 0) +
-                        (selectedAssets['Investments'] ? summary.totalInvestmentsUSD : 0) +
+                        (selectedAssets['Investments'] ? totalNon401kInvestmentsUSD : 0) +
                         (selectedAssets['Retirement'] ? summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0) : 0) +
-                        (selectedAssets['Flight Training'] ? flightTrainingUSD : 0) +
-                        (selectedAssets['Debt'] ? -Math.abs(summary.netDebtUSD) : 0)
+                        (selectedAssets['Flight Training'] ? flightTrainingSummaryUSD : 0) + // Inverted for summary
+                        (selectedAssets['Debt'] ? adjustedNetDebtUSD : 0)
                       )}
                     </p>
                     <p className="text-xs text-text-secondary">
                       {currencyFormatterMXN.format(
                         (selectedAssets['Savings'] ? summary.totalSavingsMXN : 0) +
-                        (selectedAssets['Investments'] ? summary.totalInvestmentsMXN : 0) +
+                        (selectedAssets['Investments'] ? totalNon401kInvestmentsMXN : 0) +
                         (selectedAssets['Retirement'] ? summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0) : 0) +
-                        (selectedAssets['Flight Training'] ? flightTrainingMXN : 0) +
-                        (selectedAssets['Debt'] ? -Math.abs(summary.netDebtMXN) : 0)
+                        (selectedAssets['Flight Training'] ? flightTrainingSummaryMXN : 0) + // Inverted for summary
+                        (selectedAssets['Debt'] ? adjustedNetDebtMXN : 0)
                       )} MXN
                     </p>
                   </div>
@@ -3295,35 +3641,45 @@ export default function NetWorthTracker() {
                           data={[
                             selectedAssets['Savings'] ? { 
                               name: 'Savings', 
-                              value: Math.max(0, summary.totalSavingsUSD), 
-                              fill: 'url(#summarySavingsGradient)', 
-                              mxn: summary.totalSavingsMXN 
+                              value: Math.abs(summary.totalSavingsUSD), 
+                              fill: summary.totalSavingsUSD < 0 ? 'url(#summaryDebtGradient)' : 'url(#summarySavingsGradient)', 
+                              mxn: Math.abs(summary.totalSavingsMXN),
+                              isNegative: summary.totalSavingsUSD < 0,
+                              actualValue: summary.totalSavingsUSD
                             } : null,
                             selectedAssets['Investments'] ? { 
                               name: 'Investments', 
-                              value: Math.max(0, summary.totalInvestmentsUSD), 
-                              fill: 'url(#summaryInvestmentsGradient)', 
-                              mxn: summary.totalInvestmentsMXN 
+                              value: Math.abs(totalNon401kInvestmentsUSD), 
+                              fill: totalNon401kInvestmentsUSD < 0 ? 'url(#summaryDebtGradient)' : 'url(#summaryInvestmentsGradient)', 
+                              mxn: Math.abs(totalNon401kInvestmentsMXN),
+                              isNegative: totalNon401kInvestmentsUSD < 0,
+                              actualValue: totalNon401kInvestmentsUSD
                             } : null,
                             selectedAssets['Debt'] ? { 
                               name: 'Debt', 
-                              value: Math.abs(summary.netDebtUSD), 
+                              value: Math.abs(adjustedNetDebtUSD), 
                               fill: 'url(#summaryDebtGradient)', 
-                              mxn: Math.abs(summary.netDebtMXN) 
+                              mxn: Math.abs(adjustedNetDebtMXN),
+                              isNegative: adjustedNetDebtUSD < 0,
+                              actualValue: adjustedNetDebtUSD
                             } : null,
                             selectedAssets['Flight Training'] ? { 
                               name: 'Flight Training', 
-                              value: Math.abs(flightTrainingUSD), 
-                              fill: 'url(#summaryFlightTrainingGradient)', 
-                              mxn: Math.abs(flightTrainingMXN) 
+                              value: Math.abs(flightTrainingSummaryUSD), // Inverted for summary
+                              fill: flightTrainingSummaryUSD < 0 ? 'url(#summaryDebtGradient)' : 'url(#summaryFlightTrainingGradient)', 
+                              mxn: Math.abs(flightTrainingSummaryMXN),
+                              isNegative: flightTrainingSummaryUSD < 0,
+                              actualValue: flightTrainingSummaryUSD // Inverted for summary
                             } : null,
                             selectedAssets['Retirement'] ? { 
                               name: 'Retirement', 
-                              value: Math.max(0, summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)), 
-                              fill: 'url(#summaryRetirementGradient)', 
-                              mxn: summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0) 
+                              value: Math.abs(summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)), 
+                              fill: (summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)) < 0 ? 'url(#summaryDebtGradient)' : 'url(#summaryRetirementGradient)', 
+                              mxn: Math.abs(summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0)),
+                              isNegative: (summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)) < 0,
+                              actualValue: summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)
                             } : null,
-                          ].filter((item): item is NonNullable<typeof item> => item !== null && item.value > 0)}
+                          ].filter((item): item is NonNullable<typeof item> => item !== null && item.value !== 0)}
                           cx="50%"
                           cy="50%"
                           innerRadius={70}
@@ -3334,33 +3690,31 @@ export default function NetWorthTracker() {
                           labelLine={false}
                         >
                           {[
-                            selectedAssets['Savings'] ? { name: 'Savings', value: Math.max(0, summary.totalSavingsUSD), fill: 'url(#summarySavingsGradient)' } : null,
-                            selectedAssets['Investments'] ? { name: 'Investments', value: Math.max(0, summary.totalInvestmentsUSD), fill: 'url(#summaryInvestmentsGradient)' } : null,
-                            selectedAssets['Debt'] ? { name: 'Debt', value: Math.abs(summary.netDebtUSD), fill: 'url(#summaryDebtGradient)' } : null,
-                            selectedAssets['Flight Training'] ? { name: 'Flight Training', value: Math.abs(flightTrainingUSD), fill: 'url(#summaryFlightTrainingGradient)' } : null,
-                            selectedAssets['Retirement'] ? { name: 'Retirement', value: Math.max(0, summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#summaryRetirementGradient)' } : null,
-                          ].filter((item): item is NonNullable<typeof item> => item !== null && item.value > 0).map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.fill} stroke="#ffffff" strokeWidth={3} />
+                            selectedAssets['Savings'] ? { name: 'Savings', value: Math.abs(summary.totalSavingsUSD), fill: summary.totalSavingsUSD < 0 ? 'url(#summaryDebtGradient)' : 'url(#summarySavingsGradient)', isNegative: summary.totalSavingsUSD < 0 } : null,
+                            selectedAssets['Investments'] ? { name: 'Investments', value: Math.abs(totalNon401kInvestmentsUSD), fill: totalNon401kInvestmentsUSD < 0 ? 'url(#summaryDebtGradient)' : 'url(#summaryInvestmentsGradient)', isNegative: totalNon401kInvestmentsUSD < 0 } : null,
+                            selectedAssets['Debt'] ? { name: 'Debt', value: Math.abs(adjustedNetDebtUSD), fill: 'url(#summaryDebtGradient)', isNegative: adjustedNetDebtUSD < 0 } : null,
+                            selectedAssets['Flight Training'] ? { name: 'Flight Training', value: Math.abs(flightTrainingSummaryUSD), fill: flightTrainingSummaryUSD < 0 ? 'url(#summaryDebtGradient)' : 'url(#summaryFlightTrainingGradient)', isNegative: flightTrainingSummaryUSD < 0 } : null,
+                            selectedAssets['Retirement'] ? { name: 'Retirement', value: Math.abs(summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)), fill: (summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)) < 0 ? 'url(#summaryDebtGradient)' : 'url(#summaryRetirementGradient)', isNegative: (summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)) < 0 } : null,
+                          ].filter((item): item is NonNullable<typeof item> => item !== null && item.value !== 0).map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.fill} stroke="#ffffff" strokeWidth={3} strokeDasharray={entry.isNegative ? "5 5" : "0"} />
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold text-lg">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                                <p className="text-xs text-text-secondary">{name}</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                          contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(30, 58, 138, 0.3)",
-                            borderRadius: "16px",
-                            padding: "16px",
-                            boxShadow: "0 12px 32px rgba(0, 0, 0, 0.15)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              const actualValue = data.actualValue !== undefined ? data.actualValue : data.value
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-blue-600/30 rounded-2xl p-4 shadow-xl space-y-1">
+                                  <p className={`font-bold text-lg ${actualValue < 0 ? 'text-red-600' : 'text-text-primary'}`}>
+                                    {actualValue < 0 ? '-' : ''}{currencyFormatter.format(Math.abs(actualValue))}
+                                  </p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(data.mxn)} MXN</p>
+                                  <p className="text-xs text-text-secondary">{data.name} {data.isNegative ? '(Negative)' : ''}</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                       </PieChart>
@@ -3374,35 +3728,35 @@ export default function NetWorthTracker() {
                         data={[
                           selectedAssets['Savings'] ? { 
                             name: 'Savings', 
-                            value: Math.max(0, summary.totalSavingsUSD), 
+                            value: summary.totalSavingsUSD, 
                             mxn: summary.totalSavingsMXN,
-                            fill: '#F97316'
+                            fill: summary.totalSavingsUSD < 0 ? '#EF4444' : '#F97316'
                           } : null,
                           selectedAssets['Investments'] ? { 
                             name: 'Investments', 
-                            value: Math.max(0, summary.totalInvestmentsUSD), 
-                            mxn: summary.totalInvestmentsMXN,
-                            fill: '#3B82F6'
+                            value: totalNon401kInvestmentsUSD, 
+                            mxn: totalNon401kInvestmentsMXN,
+                            fill: totalNon401kInvestmentsUSD < 0 ? '#EF4444' : '#3B82F6'
                           } : null,
                           selectedAssets['Debt'] ? { 
                             name: 'Debt', 
-                            value: Math.abs(summary.netDebtUSD), 
-                            mxn: Math.abs(summary.netDebtMXN),
+                            value: adjustedNetDebtUSD, 
+                            mxn: adjustedNetDebtMXN,
                             fill: '#EF4444'
                           } : null,
                           selectedAssets['Flight Training'] ? { 
                             name: 'Flight Training', 
-                            value: Math.abs(flightTrainingUSD), 
-                            mxn: Math.abs(flightTrainingMXN),
-                            fill: '#9333EA'
+                            value: flightTrainingSummaryUSD, // Inverted for summary
+                            mxn: flightTrainingSummaryMXN,
+                            fill: flightTrainingSummaryUSD < 0 ? '#EF4444' : '#9333EA'
                           } : null,
                           selectedAssets['Retirement'] ? { 
                             name: 'Retirement', 
-                            value: Math.max(0, summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)), 
+                            value: summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0), 
                             mxn: summary.totalRetirementMXN + retirementInvestments.reduce((sum, i) => sum + i.valueMXN, 0),
-                            fill: '#10B981'
+                            fill: (summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)) < 0 ? '#EF4444' : '#10B981'
                           } : null,
-                        ].filter((item): item is NonNullable<typeof item> => item !== null && item.value > 0)}
+                        ].filter((item): item is NonNullable<typeof item> => item !== null && item.value !== 0)}
                         margin={{ top: 20, right: 30, left: 20, bottom: 40 }}
                       >
                         <defs>
@@ -3439,25 +3793,28 @@ export default function NetWorthTracker() {
                   <YAxis
                           tick={{ fill: '#6b7280', fontSize: 12 }}
                           axisLine={{ stroke: '#d1d5db' }}
-                          tickFormatter={(value) => `$${(value / 1000).toFixed(1)}k`}
+                          tickFormatter={(value) => {
+                            const absValue = Math.abs(value)
+                            const sign = value < 0 ? '-' : ''
+                            return `${sign}$${(absValue / 1000).toFixed(1)}k`
+                          }}
                   />
                   <Tooltip
-                          formatter={(value: number, name: string, props: any) => {
-                            const mxnValue = props.payload?.mxn || 0
-                            return [
-                              <div key="tooltip" className="space-y-1">
-                                <p className="font-bold">{currencyFormatter.format(value)}</p>
-                                <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(mxnValue)} MXN</p>
-                              </div>,
-                              ''
-                            ]
-                          }}
-                    contentStyle={{
-                            backgroundColor: "rgba(255, 255, 255, 0.98)",
-                            border: "2px solid rgba(30, 58, 138, 0.3)",
-                      borderRadius: "12px",
-                            padding: "12px",
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.1)"
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length > 0) {
+                              const data = payload[0].payload
+                              const isNegative = data.value < 0
+                              return (
+                                <div className="bg-white/98 backdrop-blur-sm border-2 border-blue-600/30 rounded-xl p-3 shadow-lg space-y-1">
+                                  <p className={`font-bold ${isNegative ? 'text-red-600' : 'text-text-primary'}`}>
+                                    {isNegative ? '-' : ''}{currencyFormatter.format(Math.abs(data.value))}
+                                  </p>
+                                  <p className="text-sm text-text-tertiary">{currencyFormatterMXN.format(Math.abs(data.mxn))} MXN</p>
+                                  <p className="text-xs text-text-secondary">{data.name}</p>
+                                </div>
+                              )
+                            }
+                            return null
                           }}
                         />
                         <Bar 
@@ -3466,9 +3823,9 @@ export default function NetWorthTracker() {
                         >
                           {[
                             selectedAssets['Savings'] ? { name: 'Savings', value: Math.max(0, summary.totalSavingsUSD), fill: 'url(#summaryBarGradient1)' } : null,
-                            selectedAssets['Investments'] ? { name: 'Investments', value: Math.max(0, summary.totalInvestmentsUSD), fill: 'url(#summaryBarGradient2)' } : null,
-                            selectedAssets['Debt'] ? { name: 'Debt', value: Math.abs(summary.netDebtUSD), fill: 'url(#summaryBarGradient4)' } : null,
-                            selectedAssets['Flight Training'] ? { name: 'Flight Training', value: Math.abs(flightTrainingUSD), fill: 'url(#summaryBarGradient5)' } : null,
+                            selectedAssets['Investments'] ? { name: 'Investments', value: Math.max(0, totalNon401kInvestmentsUSD), fill: 'url(#summaryBarGradient2)' } : null,
+                            selectedAssets['Debt'] ? { name: 'Debt', value: Math.abs(adjustedNetDebtUSD), fill: 'url(#summaryBarGradient4)' } : null,
+                            selectedAssets['Flight Training'] ? { name: 'Flight Training', value: Math.abs(flightTrainingSummaryUSD), fill: 'url(#summaryBarGradient5)' } : null,
                             selectedAssets['Retirement'] ? { name: 'Retirement', value: Math.max(0, summary.totalRetirementUSD + retirementInvestments.reduce((sum, i) => sum + i.valueUSD, 0)), fill: 'url(#summaryBarGradient3)' } : null,
                           ].filter((item): item is NonNullable<typeof item> => item !== null && item.value > 0).map((entry, index) => (
                             <Cell key={`summary-bar-cell-${index}`} fill={entry.fill} />
@@ -3477,6 +3834,167 @@ export default function NetWorthTracker() {
                 </BarChart>
               </ResponsiveContainer>
                   </div>
+            </div>
+          </div>
+            </div>
+          )}
+
+          {/* Historical Assets Chart */}
+          {snapshots.length > 0 && (
+            <div className="panel p-8 bg-gradient-to-br from-white via-gradient-deepBlue/5 to-gradient-orange/5 border-2 border-gradient-deepBlue/20 relative overflow-hidden">
+              {/* Decorative background elements */}
+              <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-deepBlue/5 rounded-full blur-3xl -mr-32 -mt-32"></div>
+              <div className="absolute bottom-0 left-0 w-64 h-64 bg-gradient-orange/5 rounded-full blur-3xl -ml-32 -mb-32"></div>
+              
+              <div className="relative z-10">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="text-xl font-bold text-text-primary flex items-center gap-2">
+                      <span className="text-2xl">📈</span>
+                      Historical Assets Tracking
+                    </h3>
+                    <p className="text-sm text-text-tertiary mt-1">Track each asset category over time</p>
+                  </div>
+                </div>
+                
+                <div className="h-96">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={formatHistoryForChart('ALL')} margin={{ top: 5, right: 30, left: 20, bottom: 60 }}>
+                      <defs>
+                        <linearGradient id="savingsLineGradient" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stopColor="#F97316" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#FB923C" stopOpacity={1}/>
+                        </linearGradient>
+                        <linearGradient id="investmentsLineGradient" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stopColor="#3B82F6" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#60A5FA" stopOpacity={1}/>
+                        </linearGradient>
+                        <linearGradient id="debtLineGradient" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stopColor="#EF4444" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#DC2626" stopOpacity={1}/>
+                        </linearGradient>
+                        <linearGradient id="flightTrainingLineGradient" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stopColor="#9333EA" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#7C3AED" stopOpacity={1}/>
+                        </linearGradient>
+                        <linearGradient id="retirementLineGradient" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stopColor="#10B981" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#34D399" stopOpacity={1}/>
+                        </linearGradient>
+                        <linearGradient id="netWorthLineGradient" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stopColor="#6366F1" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#818CF8" stopOpacity={1}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" opacity={0.3} />
+                      <XAxis 
+                        dataKey="date" 
+                        tick={{ fill: '#6b7280', fontSize: 11 }}
+                        angle={-45}
+                        textAnchor="end"
+                        height={80}
+                      />
+                      <YAxis 
+                        tick={{ fill: '#6b7280', fontSize: 12 }}
+                        tickFormatter={(value) => {
+                          const absValue = Math.abs(value)
+                          const sign = value < 0 ? '-' : ''
+                          return `${sign}$${(absValue / 1000).toFixed(0)}k`
+                        }}
+                      />
+                      <Tooltip
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length > 0) {
+                            const data = payload[0].payload
+                            return (
+                              <div className="bg-white/98 backdrop-blur-sm border-2 border-blue-600/30 rounded-xl p-4 shadow-lg space-y-2">
+                                <p className="text-xs font-semibold text-text-tertiary mb-2">{data.fullDate}</p>
+                                {payload.map((entry, index) => {
+                                  const value = entry.value as number
+                                  const isNegative = value < 0
+                                  return (
+                                    <div key={index} className="flex items-center justify-between gap-4">
+                                      <div className="flex items-center gap-2">
+                                        <div 
+                                          className="w-3 h-3 rounded-full" 
+                                          style={{ backgroundColor: entry.color as string }}
+                                        />
+                                        <span className="text-xs font-medium text-text-secondary">{entry.name}</span>
+                                      </div>
+                                      <span className={`text-sm font-bold ${isNegative ? 'text-red-600' : 'text-text-primary'}`}>
+                                        {currencyFormatter.format(value)}
+                                      </span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )
+                          }
+                          return null
+                        }}
+                      />
+                      <Legend 
+                        wrapperStyle={{ paddingTop: '20px' }}
+                        iconType="line"
+                        formatter={(value) => <span style={{ color: '#6b7280', fontSize: '12px' }}>{value}</span>}
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="Savings" 
+                        stroke="#F97316" 
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                        name="Savings"
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="Investments" 
+                        stroke="#3B82F6" 
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                        name="Investments"
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="Debt" 
+                        stroke="#EF4444" 
+                        strokeWidth={2}
+                        strokeDasharray="5 5"
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                        name="Debt"
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="Flight Training" 
+                        stroke="#9333EA" 
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                        name="Flight Training"
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="Retirement" 
+                        stroke="#10B981" 
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                        name="Retirement"
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="Net Worth" 
+                        stroke="#6366F1" 
+                        strokeWidth={3}
+                        dot={{ r: 4 }}
+                        activeDot={{ r: 6 }}
+                        name="Net Worth"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
             </div>
           </div>
             </div>
@@ -3493,7 +4011,9 @@ export default function NetWorthTracker() {
             setShowForm({ type: '', visible: false })
             setEditingItem({ type: '', id: null })
           }}
-          onSave={(data) => {
+          prefillBankName={showForm.prefillBankName}
+          existingBanks={Object.keys(banksByBank)}
+          onSave={async (data) => {
             if (showForm.type === 'cash') {
               if (editingItem.id) {
                 updateCash(editingItem.id, data as Partial<Cash>)
@@ -3524,6 +4044,39 @@ export default function NetWorthTracker() {
               } else {
                 addRetirementAccount(data as Omit<RetirementAccount, 'id' | 'createdAt' | 'updatedAt'>)
               }
+            } else if (showForm.type === 'flight-cfi') {
+              if (editingItem.id) {
+                await updateCFI(editingItem.id, data as any)
+              } else {
+                await addCFI(data as any)
+              }
+            } else if (showForm.type === 'flight-plane-rental') {
+              // Calculate total from rate * hours
+              const totalUSD = (data.rate || 0) * (data.hours || 0)
+              const planeRentalData = {
+                ...data,
+                totalUSD,
+                // Map aircraft to plate for backward compatibility if needed
+                plate: data.aircraft || data.plate || '',
+                concept: data.aircraft || data.plate || '', // Use aircraft as concept for display
+              }
+              if (editingItem.id) {
+                await updatePlaneRental(editingItem.id, planeRentalData as any)
+              } else {
+                await addPlaneRental(planeRentalData as any)
+              }
+            } else if (showForm.type === 'flight-others') {
+              if (editingItem.id) {
+                await updateExtras(editingItem.id, data as any)
+              } else {
+                await addExtras(data as any)
+              }
+            } else if (showForm.type === 'flight-income') {
+              if (editingItem.id) {
+                updateIncome(editingItem.id, data as any)
+              } else {
+                addIncome(data as any)
+              }
             }
             setShowForm({ type: '', visible: false })
             setEditingItem({ type: '', id: null })
@@ -3538,10 +4091,76 @@ export default function NetWorthTracker() {
                 ? investments.find(i => i.id === editingItem.id)
                 : showForm.type === 'debt'
                 ? debts.find(d => d.id === editingItem.id)
-                : retirementAccounts.find(r => r.id === editingItem.id)
+                : showForm.type === 'retirement'
+                ? retirementAccounts.find(r => r.id === editingItem.id)
+                : showForm.type === 'flight-cfi'
+                ? cfiTransactions.find(t => t.id === editingItem.id)
+                : showForm.type === 'flight-plane-rental'
+                ? planeRentalTransactions.find(t => t.id === editingItem.id)
+                : showForm.type === 'flight-others'
+                ? extrasTransactions.find(t => t.id === editingItem.id)
+                : showForm.type === 'flight-income'
+                ? incomeTransactions.find(t => t.id === editingItem.id)
+                : undefined
               : undefined
           }
         />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm.show && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={() => setDeleteConfirm({ show: false, transactionId: null, transactionType: null })}
+        >
+          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
+          <div
+            className="relative z-10 panel animate-fade border border-gradient-orange/20 w-full max-w-md bg-white/90 backdrop-blur-xl shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-6 pb-4 border-b border-gradient-orange/10">
+              <h2 className="text-lg font-semibold text-text-primary">Confirm Delete</h2>
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm({ show: false, transactionId: null, transactionType: null })}
+                className="text-text-tertiary hover:text-text-primary"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="p-6">
+              <p className="text-sm text-text-secondary mb-6">
+                Are you sure you want to delete this transaction? This action cannot be undone.
+              </p>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setDeleteConfirm({ show: false, transactionId: null, transactionType: null })}
+                  className="px-4 py-2 text-sm font-medium rounded-xl border border-gradient-purple/20 bg-white/60 backdrop-blur-sm text-text-primary hover:border-gradient-purple/40 smooth-transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    if (deleteConfirm.transactionId && deleteConfirm.transactionType === 'flight-cfi') {
+                      await deleteCFI(deleteConfirm.transactionId)
+                    } else if (deleteConfirm.transactionId && deleteConfirm.transactionType === 'flight-plane-rental') {
+                      await deletePlaneRental(deleteConfirm.transactionId)
+                    } else if (deleteConfirm.transactionId && deleteConfirm.transactionType === 'flight-others') {
+                      deleteExtras(deleteConfirm.transactionId)
+                    }
+                    setDeleteConfirm({ show: false, transactionId: null, transactionType: null })
+                  }}
+                  className="px-4 py-2 text-sm font-medium rounded-xl bg-gradient-to-r from-orange-500 to-purple-600 text-white hover:from-orange-600 hover:to-purple-700 smooth-transition"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -3556,12 +4175,16 @@ function FormModal({
   onClose,
   onSave,
   existingData,
+  prefillBankName,
+  existingBanks,
 }: {
   type: string
   editingItem: { type: string; id: string | null }
   onClose: () => void
   onSave: (data: any) => void
   existingData?: any
+  prefillBankName?: string
+  existingBanks?: string[]
 }) {
   const [currencyInput, setCurrencyInput] = useState<'MXN' | 'USD'>(() => {
     // When editing, default to USD if amountUSD/balanceUSD is non-zero, otherwise MXN
@@ -3705,15 +4328,35 @@ function FormModal({
       return existingData
     }
     if (type === 'cash') {
-      return { name: '', type: 'pesos', amountMXN: 0, amountUSD: 0 }
+      // Auto-generate name based on type when creating new
+      const defaultType = existingData?.type || 'pesos'
+      const defaultName = defaultType === 'pesos' ? 'Efectivo' : 'Cash'
+      return { name: existingData?.name || defaultName, type: defaultType, amountMXN: existingData?.amountMXN || 0, amountUSD: existingData?.amountUSD || 0 }
     } else if (type === 'bank') {
-      return { name: '', bankName: '', accountType: 'checking', balanceMXN: 0, balanceUSD: 0 }
+      return { name: '', bankName: prefillBankName || existingData?.bankName || '', accountType: existingData?.accountType || 'checking', balanceMXN: existingData?.balanceMXN || 0, balanceUSD: existingData?.balanceUSD || 0 }
     } else if (type === 'investment') {
       return { name: '', type: 'etf', quantity: 0, pricePerShare: 0, valueMXN: 0, valueUSD: 0 }
     } else if (type === 'debt') {
       return { name: '', type: 'i-owe', amountMXN: 0, amountUSD: 0 }
     } else if (type === 'retirement') {
       return { name: '', type: 'afore', valueMXN: 0, valueUSD: 0 }
+    } else if (type === 'flight-cfi') {
+      return { concept: existingData?.concept || 'Flight', ratePerHour: existingData?.ratePerHour || 80, hours: existingData?.hours || 0, date: existingData?.date || '' }
+    } else if (type === 'flight-plane-rental') {
+      // Calculate rate from totalUSD / hours if rate doesn't exist
+      const calculatedRate = existingData?.rate || (existingData?.totalUSD && existingData?.hours ? existingData.totalUSD / existingData.hours : 0)
+      return { 
+        aircraft: existingData?.aircraft || existingData?.plate || '', 
+        rate: calculatedRate, 
+        hours: existingData?.hours || 0, 
+        idp: existingData?.idp || 0, 
+        date: existingData?.date || '',
+        totalUSD: existingData?.totalUSD || 0
+      }
+    } else if (type === 'flight-others') {
+      return { concept: existingData?.concept || '', totalUSD: existingData?.totalUSD || 0, date: existingData?.date || '' }
+    } else if (type === 'flight-income') {
+      return { concept: existingData?.concept || 'Papá', totalUSD: existingData?.totalUSD || 0, date: existingData?.date || '' }
     }
     return {}
   })
@@ -3821,40 +4464,61 @@ function FormModal({
         <div className="p-6 space-y-4">
           {type === 'cash' && (
             <>
-              <input
-                type="text"
-                placeholder="Name (e.g., Pesos, Dollars)"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-purple/40 focus:bg-white/80 smooth-transition"
-                required
-              />
-              <select
-                value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary focus:outline-none focus:border-gradient-purple/40 focus:bg-white/80 smooth-transition appearance-none cursor-pointer"
-              >
-                <option value="pesos">Pesos (MXN)</option>
-                <option value="dollars">Dollars (USD)</option>
-              </select>
-              <input
-                type="number"
-                step="0.01"
-                placeholder="Amount in MXN"
-                value={formData.amountMXN}
-                onChange={(e) => setFormData({ ...formData, amountMXN: parseFloat(e.target.value) || 0 })}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-purple/40 focus:bg-white/80 smooth-transition"
-                required
-              />
-              <input
-                type="number"
-                step="0.01"
-                placeholder="Amount in USD"
-                value={formData.amountUSD}
-                onChange={(e) => setFormData({ ...formData, amountUSD: parseFloat(e.target.value) || 0 })}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-purple/40 focus:bg-white/80 smooth-transition"
-                required
-              />
+              <div className="flex items-center gap-3">
+                <select
+                  value={formData.type}
+                  onChange={(e) => {
+                    const newType = e.target.value as 'pesos' | 'dollars'
+                    // Auto-generate name based on type
+                    const newName = newType === 'pesos' ? 'Efectivo' : 'Cash'
+                    // Convert amount when switching currency
+                    let newAmountMXN = formData.amountMXN
+                    let newAmountUSD = formData.amountUSD
+                    if (newType === 'pesos' && formData.amountUSD > 0) {
+                      // Converting from USD to MXN
+                      newAmountMXN = formData.amountUSD * EXCHANGE_RATE
+                      newAmountUSD = 0
+                    } else if (newType === 'dollars' && formData.amountMXN > 0) {
+                      // Converting from MXN to USD
+                      newAmountUSD = formData.amountMXN / EXCHANGE_RATE
+                      newAmountMXN = 0
+                    } else {
+                      // Reset to empty when switching if no value
+                      if (newType === 'pesos') {
+                        newAmountUSD = 0
+                      } else {
+                        newAmountMXN = 0
+                      }
+                    }
+                    setFormData({ ...formData, type: newType, name: newName, amountMXN: newAmountMXN, amountUSD: newAmountUSD })
+                  }}
+                  className="px-4 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary focus:outline-none focus:border-gradient-purple/40 focus:bg-white/80 smooth-transition appearance-none cursor-pointer"
+                >
+                  <option value="pesos">MXN</option>
+                  <option value="dollars">USD</option>
+                </select>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder={formData.type === 'pesos' ? 'Amount in MXN' : 'Amount in USD'}
+                  value={formData.type === 'pesos' ? (formData.amountMXN || '') : (formData.amountUSD || '')}
+                  onChange={(e) => {
+                    const inputValue = e.target.value
+                    const value = inputValue === '' ? 0 : parseFloat(inputValue) || 0
+                    if (formData.type === 'pesos') {
+                      const usdValue = value / EXCHANGE_RATE
+                      setFormData({ ...formData, amountMXN: value, amountUSD: usdValue })
+                    } else {
+                      const mxnValue = value * EXCHANGE_RATE
+                      setFormData({ ...formData, amountUSD: value, amountMXN: mxnValue })
+                    }
+                  }}
+                  className="flex-1 px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-purple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              {/* Hidden name field - auto-generated */}
+              <input type="hidden" value={formData.name || (formData.type === 'pesos' ? 'Efectivo' : 'Cash')} />
             </>
           )}
 
@@ -3873,14 +4537,32 @@ function FormModal({
               </div>
               <div>
                 <label className="block text-sm font-semibold text-text-primary mb-2">Bank Name</label>
-              <input
-                type="text"
-                  placeholder="e.g., Santander, Bank of America, Chase"
-                value={formData.bankName}
-                onChange={(e) => setFormData({ ...formData, bankName: e.target.value })}
+                {existingBanks && existingBanks.length > 0 && (
+                  <select
+                    value={formData.bankName}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setFormData({ ...formData, bankName: e.target.value })
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition appearance-none cursor-pointer mb-2"
+                  >
+                    <option value="">Select existing bank or type new...</option>
+                    {existingBanks.map((bank) => (
+                      <option key={bank} value={bank}>
+                        {bank}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  type="text"
+                  placeholder={existingBanks && existingBanks.length > 0 ? "Or type a new bank name" : "e.g., Santander, Bank of America, Chase"}
+                  value={formData.bankName}
+                  onChange={(e) => setFormData({ ...formData, bankName: e.target.value })}
                   className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
-                required
-              />
+                  required
+                />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-text-primary mb-2">Account Type</label>
@@ -4336,7 +5018,7 @@ function FormModal({
                 type="number"
                 step="0.01"
                 placeholder="Value in MXN"
-                value={formData.valueMXN}
+                value={formData.valueMXN || ''}
                 onChange={(e) => setFormData({ ...formData, valueMXN: parseFloat(e.target.value) || 0 })}
                 className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-purple/40 focus:bg-white/80 smooth-transition"
                 required
@@ -4345,11 +5027,218 @@ function FormModal({
                 type="number"
                 step="0.01"
                 placeholder="Value in USD"
-                value={formData.valueUSD}
+                value={formData.valueUSD || ''}
                 onChange={(e) => setFormData({ ...formData, valueUSD: parseFloat(e.target.value) || 0 })}
                 className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-purple/40 focus:bg-white/80 smooth-transition"
                 required
               />
+            </>
+          )}
+
+          {type === 'flight-cfi' && (
+            <>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Concept</label>
+                <select
+                  value={formData.concept || 'Flight'}
+                  onChange={(e) => setFormData({ ...formData, concept: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition appearance-none cursor-pointer"
+                  required
+                >
+                  <option value="Flight">Flight</option>
+                  <option value="Ground">Ground</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Rate Per Hour (USD)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="e.g., 50.00"
+                  value={formData.ratePerHour || ''}
+                  onChange={(e) => setFormData({ ...formData, ratePerHour: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Hours</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder="e.g., 1.5"
+                  value={formData.hours || ''}
+                  onChange={(e) => setFormData({ ...formData, hours: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Date</label>
+                <input
+                  type="date"
+                  value={formData.date || ''}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Total (USD)</label>
+                <input
+                  type="text"
+                  value={currencyFormatter.format((formData.ratePerHour || 0) * (formData.hours || 0))}
+                  readOnly
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary cursor-not-allowed opacity-75"
+                />
+              </div>
+            </>
+          )}
+
+          {type === 'flight-plane-rental' && (
+            <>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Aircraft</label>
+                <input
+                  type="text"
+                  placeholder="e.g., N123AB"
+                  value={formData.aircraft || ''}
+                  onChange={(e) => setFormData({ ...formData, aircraft: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Rate</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="e.g., 150.00"
+                  value={formData.rate || ''}
+                  onChange={(e) => setFormData({ ...formData, rate: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Hours</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder="e.g., 2.0"
+                  value={formData.hours || ''}
+                  onChange={(e) => setFormData({ ...formData, hours: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">IDP</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder="e.g., 1.5"
+                  value={formData.idp || ''}
+                  onChange={(e) => setFormData({ ...formData, idp: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Date</label>
+                <input
+                  type="date"
+                  value={formData.date || ''}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Total (USD)</label>
+                <input
+                  type="text"
+                  value={currencyFormatter.format((formData.rate || 0) * (formData.hours || 0))}
+                  readOnly
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary cursor-not-allowed opacity-75"
+                />
+              </div>
+            </>
+          )}
+
+          {type === 'flight-others' && (
+            <>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Concept</label>
+                <input
+                  type="text"
+                  placeholder="e.g., Landing Fees, Fuel, etc."
+                  value={formData.concept || ''}
+                  onChange={(e) => setFormData({ ...formData, concept: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Total (USD)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="e.g., 50.00"
+                  value={formData.totalUSD || ''}
+                  onChange={(e) => setFormData({ ...formData, totalUSD: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Date</label>
+                <input
+                  type="date"
+                  value={formData.date || ''}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+            </>
+          )}
+
+          {type === 'flight-income' && (
+            <>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Concept</label>
+                <input
+                  type="text"
+                  placeholder="e.g., Flight Instruction Income"
+                  value={formData.concept ?? 'Papá'}
+                  onChange={(e) => setFormData({ ...formData, concept: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Total Amount (USD)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="e.g., 200.00"
+                  value={formData.totalUSD || ''}
+                  onChange={(e) => setFormData({ ...formData, totalUSD: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Date</label>
+                <input
+                  type="date"
+                  value={formData.date || ''}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gradient-orange/20 bg-white/60 backdrop-blur-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-gradient-bluePurple/40 focus:bg-white/80 smooth-transition"
+                  required
+                />
+              </div>
             </>
           )}
 
